@@ -34,7 +34,7 @@ Each participating working directory gets a symlink so any session reaches groun
 <workdir>/research-memory -> <worknote-dir>/MyStudy.memory/
 ```
 
-- The symlink is registered in the workdir's **`.git/info/exclude`**, **never** `.gitignore`. Memory sharing is a local workflow concern, not a repo property — putting it in `.gitignore` would leak it into the tracked repo.
+- The symlink is registered in git's **info/exclude**, **never** `.gitignore`. Memory sharing is a local workflow concern, not a repo property — putting it in `.gitignore` would leak it into the tracked repo. Resolve the exclude file with `git rev-parse --git-path info/exclude` (works in both a normal repo and a linked worktree, where `.git` is a *file* and the exclude lives in the shared `$GIT_COMMON_DIR/info/exclude`), then append the symlink name to it.
 - `link` is per-workdir: run it once in each tab/worktree that participates.
 
 ## Files & mutability
@@ -45,7 +45,27 @@ Each participating working directory gets a symlink so any session reaches groun
 | `configs.md` | Mutable table | Status of each config/recipe: id or path, owning workdir, status, key knobs, evidence pointer. |
 | `runbook.md` | Mutable, sectioned | Execution learnings: Environment / Submit / Monitor / Collect / Pitfalls. |
 | `jobs.md` | **Append-only ledger** | One row per job: timestamp, id, purpose, config ref, owner, status, result pointer. Status updates **append a new row** referencing the job id; never rewrite or reorder. |
-| `blockers.md` | Append-only entries, mutable `Answer:` only | Open questions for the human: id, timestamp, workdir, placeholder ref, Question, Evidence, `Answer:`. |
+| `blockers.md` | Append-only entries, mutable `Answer:` only | Open questions for the human: id, timestamp, workdir, placeholder ref, task file, Question, Evidence, `Answer:`. |
+| `tasks/task-<id>.md` | Attempts append-only; Working notes mutable; Outcome write-once | Per-task restartable working state, one file per placeholder id. Created lazily on first claim. Read only by the owner/restarter of `#id`. |
+
+## Memory hierarchy — detail lives low, curated facts flow up
+
+Three explicit levels keep `MEMORY.md` small by construction: only promoted, evidence-backed facts rise; task detail stays reachable by pointer, never inlined.
+
+| Level | Files | Reader | Content |
+|---|---|---|---|
+| **L1 global index** | `MEMORY.md` (≤150 lines) | every session, bounded read | validated conclusions, current focus, pointers |
+| **L2 topic ledgers** | `configs.md` `runbook.md` `jobs.md` `blockers.md` | cross-task, structured | verdicts, recipes, job rows, Q&A |
+| **L3 per-task** | `tasks/task-<id>.md` | only the owner/restarter of `#id` | restartable working state (Brief / Attempts / Working notes / Outcome) |
+
+**Promotion protocol** (task → up, only via research-memory actions, each with an evidence pointer):
+
+- config verdict proven → `update-config-status` (L2 `configs.md`).
+- reusable execution learning/pitfall → `add-learning` (L2 `runbook.md`).
+- job submitted / status change → `add-job` (L2 `jobs.md`).
+- **validated conclusion the overall worknote depends on** → one bullet in `MEMORY.md` "Validated conclusions" (L1), with a pointer back to `tasks/task-<id>.md`.
+
+Everything else stays in the task file. `MEMORY.md` stays ≤150 lines because it only ever receives promoted bullets. Completed task files are kept as a cheap archive — neatness is enforced at L1 by curation, not by deleting L3.
 
 `configs.md` status state machine:
 
@@ -53,6 +73,7 @@ Each participating working directory gets a symlink so any session reaches groun
 untested --> working    (job succeeded, verified)
 untested --> failed      (job failed)
 failed   --> untested    (config edited)
+working  --> failed      (a validated config regresses)
 working  --> superseded  (better config validated)
 ```
 
@@ -62,7 +83,7 @@ working  --> superseded  (better config validated)
 
 Inherited from the `verl-worknote` skill. The point is to keep the **main agent's context lean** while memory files grow:
 
-- **All mutating actions** (`init`, `link`, `add-job`, `update-config-status`, `add-learning`) MUST be dispatched to a subagent via the `Agent` tool. The main agent never loads the full file to mutate it.
+- **All mutating actions** (`init`, `link`, `add-job`, `update-config-status`, `add-learning`, `task-note`) MUST be dispatched to a subagent via the `Agent` tool. The main agent never loads the full file to mutate it.
 - **Main agents do only bounded reads**: `MEMORY.md` (≤150 lines) directly via `Read`; anything larger goes through a read subagent that returns only the answer.
 - **Mutable tables vs append-only ledgers**: `MEMORY.md`, `configs.md`, and `runbook.md` sections are rewritten in place; `jobs.md` and `blockers.md` entries are append-only (append new rows/entries; the only in-place edit permitted on an append-only file is filling a blocker's `Answer:`).
 - **Every fact carries a timestamp and an evidence pointer** (job id, log path, dashboard URL). A claim without evidence does not belong in memory — if the schema can't be filled, the fact isn't ready to record.
@@ -74,13 +95,14 @@ Inherited from the `verl-worknote` skill. The point is to keep the **main agent'
 | Action | Dispatch | Effect |
 |---|---|---|
 | `init <worknote-path>` | Subagent | Create `<Worknote-Name>.memory/` beside the worknote and copy the five template files into it. |
-| `link` | Subagent | Create `./research-memory` symlink in the current workdir + add it to `.git/info/exclude`. |
+| `link` | Subagent | Create `./research-memory` symlink in the current workdir + add it to git's `info/exclude` (resolved via `git rev-parse --git-path info/exclude`). |
+| `task-note <id> <text>` | Subagent | Append `<text>` to `tasks/task-<id>.md` (Attempts or Working notes); create the file from `task.md` on first use. |
 | `add-job <fields>` | Subagent | Append one row to `jobs.md`. |
 | `update-config-status <id> <status>` | Subagent | Update the row for `<id>` in `configs.md` (evidence pointer required). |
 | `add-learning <text>` | Subagent | Add `<text>` to `runbook.md` under the matching section. |
 | `show-summary` | Main (direct `Read`, limit ~150) | Bounded direct read of `MEMORY.md`. |
 
-`init` copies templates from `${CLAUDE_PLUGIN_ROOT}/skills/research-memory/templates/` — the five files `MEMORY.md`, `configs.md`, `runbook.md`, `jobs.md`, `blockers.md`. The subagent resolves the worknote's directory and base name, creates `<dir>/<BaseName>.memory/`, and copies each template file in verbatim (substituting the project name into `MEMORY.md`'s heading).
+`init` copies templates from the plugin's `skills/research-memory/templates/` directory — the five files `MEMORY.md`, `configs.md`, `runbook.md`, `jobs.md`, `blockers.md`. `task.md` is **not** copied at init; per-task files are created lazily on first claim (see [[worknote-orchestrate]]). **The main agent resolves `${CLAUDE_PLUGIN_ROOT}` to an absolute path before filling the dispatch prompt** — a dispatched subagent does not inherit that variable, so the prompt must carry the concrete templates path. The subagent resolves the worknote's directory and base name, creates `<dir>/<BaseName>.memory/`, and copies each template file in verbatim (substituting the project name into `MEMORY.md`'s heading).
 
 ## Subagent dispatch prompt skeleton
 
@@ -90,27 +112,34 @@ For any mutating action, dispatch a `general-purpose` Agent with a self-containe
 You are maintaining a shared research-memory store (machine-facing ground truth beside a human worknote).
 
 Memory dir: <absolute path to <Name>.memory/>
-Action: <init | link | add-job | update-config-status | add-learning>
-Target file: <MEMORY.md | configs.md | runbook.md | jobs.md | blockers.md — the file this action writes>
+Action: <init | link | add-job | update-config-status | add-learning | task-note>
+Target file: <MEMORY.md | configs.md | runbook.md | jobs.md | blockers.md | tasks/task-<id>.md — the file this action writes>
 Argument(s): <as provided>
 
 File format (do not violate):
 - MEMORY.md / configs.md / runbook.md are MUTABLE — rewrite in place; keep MEMORY.md ≤150 lines.
 - jobs.md and blockers.md are APPEND-ONLY — append a new row/entry at EOF; never reorder or rewrite
   existing rows. The ONLY in-place edit allowed is filling a blocker's `Answer:` field.
+- tasks/task-<id>.md — Attempts are APPEND-ONLY (never rewrite a prior `### Attempt N`); Working notes
+  are mutable scratch; Outcome is filled once.
 
 Row/entry schema for this action (fill EVERY column; refuse if you cannot):
 <paste the exact target schema, e.g.:
  jobs.md row: | timestamp | job id | purpose | config ref | owner | status | result ptr |
  configs.md row: | id/path | workdir | status | key knobs | evidence |  (status ∈ untested/working/failed/superseded)
- blockers.md entry: ### BLOCKED#<id> — <title> / timestamp / workdir / placeholder ref / Question / Evidence / Answer:
+ blockers.md entry: ### BLOCKED#<id> — <title> / timestamp / workdir / placeholder ref / task file / Question / Evidence / Answer:
+ tasks/task-<id>.md: Brief / Attempts (### Attempt N: tried, jobs, outcome, next step) / Working notes / Outcome
 >
 Evidence pointer is REQUIRED for add-job and update-config-status. No evidence → refuse and report why.
 
 For `init`: create <dir>/<BaseName>.memory/ and copy the five template files from
-  ${CLAUDE_PLUGIN_ROOT}/skills/research-memory/templates/ , substituting the project name into MEMORY.md's heading.
+  <ABSOLUTE templates path — the main agent expands ${CLAUDE_PLUGIN_ROOT} before dispatch> ,
+  substituting the project name into MEMORY.md's heading. (task.md is NOT copied at init.)
 For `link`: create ./research-memory -> <memory dir> in the current workdir, then append the symlink
-  name to .git/info/exclude (NOT .gitignore). Refuse if not inside a git worktree.
+  name to the file printed by `git rev-parse --git-path info/exclude` (NOT .gitignore). Refuse if
+  `git rev-parse --git-dir` fails (not inside a git worktree).
+For `task-note`: if tasks/task-<id>.md does not exist, create it from task.md (same absolute templates
+  path) filling the Brief, then append <text> as a new Attempt section or Working-notes bullet.
 
 Timestamp: `date '+%Y-%m-%d %H:%M'`.
 
@@ -120,7 +149,7 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 ## Refusals & edge cases
 
 - `init` when the `.memory/` dir already exists → refuse; suggest `link` (to join it) or editing directly.
-- `link` when the current directory is **not inside a git worktree** (no `.git`) → refuse; there is no `.git/info/exclude` to write.
+- `link` when the current directory is **not inside a git worktree** (`git rev-parse --git-dir` fails) → refuse; there is no `info/exclude` to write.
 - `link` when `./research-memory` already exists → refuse; report where it points.
 - `add-job` or `update-config-status` **without an evidence pointer** → refuse; an unsupported fact does not belong in memory.
 - `update-config-status` with a status outside `untested/working/failed/superseded`, or an illegal transition → refuse and name the legal transitions.
@@ -130,7 +159,8 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 ## Verification checklist
 
 1. `init` created all five files and stamped the project name into `MEMORY.md`.
-2. `link` created the symlink AND added it to `.git/info/exclude` (not `.gitignore`).
+2. `link` created the symlink AND added it to the file from `git rev-parse --git-path info/exclude` (not `.gitignore`); verify it resolves to a writable path even in a linked worktree.
 3. `add-job` appended exactly one row at EOF; prior rows byte-identical.
 4. `update-config-status` changed only the target row and carried an evidence pointer.
 5. `add-learning` landed under the correct runbook section; other sections unchanged.
+6. `task-note` created `tasks/task-<id>.md` from the template on first use and appended without rewriting a prior Attempt.

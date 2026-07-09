@@ -12,13 +12,13 @@ Research and engineering work is a loop run many times in parallel: submit a lon
 Two skills:
 
 - **`research-memory`** — lifecycle for the shared store beside a worknote (`init`, `link`, `add-job`, `update-config-status`, `add-learning`, `show-summary`). All writes go through subagents to keep the main context lean.
-- **`worknote-orchestrate`** — scans the worknote, classifies each placeholder as *fill-from-data* or *needs-work*, and runs the needs-work ones either as **coordinator-driven parallel agents** (Mode A) or a **human-driven tab** (Mode B). State lives in the worknote itself as `<<RUNNING#id ...>>` / `<<BLOCKED#id ...>>` markers, so the worknote is the dashboard. Layers on `complete-report`.
+- **`worknote-orchestrate`** — scans the worknote, stamps each placeholder with a stable `#id`, classifies it as *fill-from-data* or *needs-work*, and runs the needs-work ones either as **coordinator-driven parallel agents** (Mode A) or a **human-driven tab** (Mode B). State lives in the worknote itself as `<<RUNNING#id ...>>` / `<<BLOCKED#id ...>>` markers, so the worknote is the dashboard. The human may edit/reword/delete placeholders mid-flight — agents tolerate it (memory is ground truth; the worknote write is best-effort). `/worknote-orchestrate <worknote> status` prints a read-only reconciled dashboard. Per-task restartable state lives in `tasks/task-<id>.md` so a re-dispatch resumes instead of re-deriving. Layers on `complete-report`.
 
 ## Install
 
 ```
 /plugin marketplace add Superjomn/worknote-orchestrator
-/plugin install worknote-orchestrator
+/plugin install worknote-orchestrator@worknote-orchestrator
 ```
 
 ## Quickstart
@@ -45,7 +45,7 @@ Canary-then-fan-out: bring up one config interactively (Mode B) until it's `work
 
 ## Design
 
-Full rationale and diagrams: `design/worknote-orchestrator-design.md` in the [duckling-pie](https://github.com/Superjomn) project. It defines the two-artifact split (§2), the shared-memory layer (§3), the orchestrator (§4–§5), roles (§6), and the end-to-end flow (§7).
+The two skills are self-documenting: `worknote-orchestrate` covers the two-artifact split, the orchestrator modes, roles, and the end-to-end flow; `research-memory` covers the shared-memory layer and its three-level hierarchy (L1 index / L2 ledgers / L3 per-task files).
 
 ## License
 

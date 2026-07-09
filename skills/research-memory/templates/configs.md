@@ -16,6 +16,7 @@ Status state machine:
 untested --> working    (job succeeded, verified)
 untested --> failed      (job failed)
 failed   --> untested    (config edited)
+working  --> failed      (a validated config regresses)
 working  --> superseded  (better config validated)
 ```
 

@@ -11,6 +11,7 @@
 - timestamp: <YYYY-MM-DD HH:MM>
 - workdir: <path or worktree name>
 - placeholder ref: <worknote path>#<id>
+- task file: <./tasks/task-<id>.md — the per-task working state that raised this>
 - Question: <the specific question for the human>
 - Evidence: <job id / log path / dashboard URL that motivates the question>
 - Answer: <empty until the human or coordinator fills it>
