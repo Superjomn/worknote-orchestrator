@@ -1,8 +1,8 @@
 ---
 name: research-memory
-description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/task-note/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
+description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/task-note/add-blocker/answer-blocker/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
 author: Chunwei Yan
-version: 0.3.0
+version: 0.3.1
 user_invocable: true
 ---
 
@@ -101,7 +101,7 @@ Inherited from the `verl-worknote` skill. The point is to keep the **main agent'
 | `update-config-status <id> <status>` | Subagent | Update the row for `<id>` in `configs.md` (evidence pointer required). |
 | `add-learning <text>` | Subagent | Add `<text>` to `runbook.md` under the matching section. |
 | `add-blocker <fields>` | Subagent | Append one entry to `blockers.md` (existing schema). |
-| `answer-blocker <id> <text>` | Subagent | Fill the `Answer:` of entry `#id` — the one in-place edit permitted on `blockers.md`. |
+| `answer-blocker <id> <text>` | Subagent | Fill the `Answer:` of the **latest (last)** entry for `#id` — the one in-place edit permitted on `blockers.md`. |
 | `show-summary` | Main (direct `Read`, limit ~150) | Bounded direct read of `MEMORY.md`. |
 
 `init` copies templates from the plugin's `skills/research-memory/templates/` directory — the five files `MEMORY.md`, `configs.md`, `runbook.md`, `jobs.md`, `blockers.md`. `task.md` is **not** copied at init; per-task files are created lazily on first claim (see [[worknote-orchestrate]]). **The main agent resolves `${CLAUDE_PLUGIN_ROOT}` to an absolute path before filling the dispatch prompt** — a dispatched subagent does not inherit that variable, so the prompt must carry the concrete templates path. The subagent resolves the worknote's directory and base name, creates `<dir>/<BaseName>.memory/`, and copies each template file in verbatim (substituting the project name into `MEMORY.md`'s heading).
@@ -132,7 +132,7 @@ Row/entry schema for this action (fill EVERY column; refuse if you cannot):
  blockers.md entry: ### BLOCKED#<id> — <title> / timestamp / workdir / placeholder ref / task file / Question / Evidence / Answer:
  tasks/task-<id>.md: Brief / Attempts (### Attempt N: tried, jobs, outcome, next step) / Working notes / Outcome
 >
-Evidence pointer is REQUIRED for add-job and update-config-status. No evidence → refuse and report why.
+Evidence pointer is REQUIRED for add-job, update-config-status, and add-blocker. No evidence → refuse and report why.
 
 For `init`: create <dir>/<BaseName>.memory/ and copy the five template files from
   <ABSOLUTE templates path — the main agent expands ${CLAUDE_PLUGIN_ROOT} before dispatch> ,
@@ -146,9 +146,10 @@ For `task-note`: if tasks/task-<id>.md does not exist, create it from task.md (s
 For `add-blocker`: append ONE new `### BLOCKED#<id> — <title>` entry at EOF of blockers.md (never
   reorder or rewrite existing entries), filling every field of the entry schema including an evidence
   pointer. Leave `Answer:` empty. Refuse if evidence is missing.
-For `answer-blocker`: fill ONLY the `Answer:` field of entry `#id` in blockers.md — the sole in-place
-  edit permitted on this append-only file. Refuse if the answer text is empty, no entry `#id` exists,
-  or that entry's `Answer:` is already non-empty.
+For `answer-blocker`: fill ONLY the `Answer:` field of the LATEST (last) entry for `#id` in
+  blockers.md — a re-blocked task appends a second `### BLOCKED#<id>` entry, so target the most
+  recent one. This is the sole in-place edit permitted on this append-only file. Refuse if the answer
+  text is empty, no entry `#id` exists, or ALL entries for `#id` already have a non-empty `Answer:`.
 
 Timestamp: `date '+%Y-%m-%d %H:%M'`.
 
@@ -162,7 +163,7 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 - `link` when `./research-memory` already exists → refuse; report where it points.
 - `add-job` or `update-config-status` **without an evidence pointer** → refuse; an unsupported fact does not belong in memory.
 - `add-blocker` **without an evidence pointer** → refuse; a blocker must cite what motivates the question.
-- `answer-blocker` with **empty answer text**, **no matching entry `#id`**, or an entry whose `Answer:` is **already filled** → refuse (the last preserves the append-only/write-once discipline).
+- `answer-blocker` with **empty answer text**, **no matching entry `#id`**, or where **all** entries for `#id` are **already filled** → refuse (the last preserves the append-only/write-once discipline). When a placeholder was re-blocked, `answer-blocker` fills the **latest** `#id` entry.
 - `update-config-status` with a status outside `untested/working/failed/superseded`, or an illegal transition → refuse and name the legal transitions.
 - Empty argument for any `add-*`/`update-*` action → refuse.
 - `show-summary` / any action when the memory dir is missing → refuse; suggest `init`.
@@ -176,4 +177,4 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 5. `add-learning` landed under the correct runbook section; other sections unchanged.
 6. `task-note` created `tasks/task-<id>.md` from the template on first use and appended without rewriting a prior Attempt.
 7. `add-blocker` appended exactly one entry at EOF with every field filled (evidence included) and an empty `Answer:`; prior entries byte-identical.
-8. `answer-blocker` filled only the target entry's `Answer:` and refused if it was already answered.
+8. `answer-blocker` filled only the **latest** `#id` entry's `Answer:` and refused only if **all** entries for `#id` were already answered.

@@ -2,7 +2,7 @@
 name: worknote-orchestrate
 description: "Fill <<...>> placeholders in a human worknote by classifying each as fill-from-data or needs-work, then running the needs-work ones as jobs across parallel coordinator-driven agents (Mode A) or a human-driven tab (Mode B), with a claiming protocol, worknote-embedded state markers, and ONE batched human-feedback round. Layers on complete-report and records everything via research-memory. TRIGGER when: user runs /worknote-orchestrate, says \"fill worknote placeholders\", \"run worknote jobs\", \"orchestrate the worknote\", or wants to execute + fill placeholders that require running jobs."
 author: Chunwei Yan
-version: 0.3.0
+version: 0.3.1
 user_invocable: true
 ---
 
@@ -65,8 +65,8 @@ Every marker and Mode B invocation uses a stable `#<id>`, so ids must be defined
   3. **Blocker entries** — every `BLOCKED#<id>` in `blockers.md`.
 
   Deleting a placeholder never frees its id: once all markers complete, sources 2 and 3 still pin the max, so a later scan will not reuse an id that already owns a `task-<id>.md` file or a blocker entry.
-- **Human-added placeholders get stamped at the next scan.** A fresh `<<...>>` with no `#id` is assigned the next id on the following scan (the next planning scan — `status` never stamps).
-- Because ids are stable, **Mode B `#id` always resolves to exactly one placeholder** (or its `RUNNING`/`BLOCKED` marker), unambiguously.
+- **Human-added placeholders get stamped at the next scan.** A fresh `<<...>>` with no `#id` is assigned the next id on the following scan (the next planning scan — `status` never stamps). The only other stamp site is a **Mode B claim on an un-stamped target**, which stamps exactly one placeholder (see Mode B "Stamp-on-claim").
+- Because ids are stable, **a stamped `#id` resolves to exactly one placeholder** (or its `RUNNING`/`BLOCKED` marker), unambiguously. This uniqueness holds **once stamped**; a Mode B `#id` target on a never-planned worknote may match no stamped placeholder yet — it goes through the Mode B pick-and-stamp path (see "Stamp-on-claim").
 
 ## State machine & markers — the worknote is the dashboard
 
@@ -88,7 +88,7 @@ pending  --> running   (claimed: agent dispatch or tab invocation)
 running  --> done       (success — placeholder replaced with final content)
 running  --> blocked    (failure needing human input)
 blocked  --> blocked+ans (human writes answer inline or in blockers.md)
-blocked+ans --> running  (re-activated with the answer embedded in a fresh agent's prompt)
+blocked+ans --> running  (re-activated with the answer in a fresh agent's prompt — marker rewritten job=pending, same claim rule as pending-->running)
 blocked  --> running    (human takeover — Mode B in that workdir)
 running  --> running    (re-invocation resumes via the jobs.md ledger)
 running  --> cancelled  (human deleted the marker — see "Human edits mid-flight")
@@ -110,7 +110,7 @@ One coordinator session runs the whole-file invocation:
 2. Dispatch each approved needs-work placeholder to a **placeholder-agent** — a subagent instructed to `cd` into the target workdir first. Independent placeholders are dispatched **in parallel** (one message, multiple `Agent` calls). Before dispatching, flip the placeholder to `<<RUNNING#id owner=agent job=pending since=... task: ...>>` — the job id does not exist until the agent submits, so the coordinator writes `job=pending` and the agent fills the real id once it has one (skeleton step 3).
 3. Placeholder-agents **never block on human input.** On a blocker they: write a structured `blockers.md` entry via research-memory `add-blocker`, flip the placeholder to `<<BLOCKED#id ...>>`, and return a status line.
 4. The coordinator collects completions and **serializes ALL pending blockers into a single `AskUserQuestion` round** — one interrupt instead of N scattered ones.
-5. Each answer is written into its blocker's `Answer:` field via research-memory `answer-blocker <id> <text>` (and inline into the marker), and the affected placeholders are immediately re-dispatched (`BLOCKED` → `RUNNING`) with the answer embedded in the fresh agent's prompt.
+5. Each answer is written into its blocker's `Answer:` field via research-memory `answer-blocker <id> <text>` (and inline into the marker), and the affected placeholders are immediately re-dispatched (`BLOCKED` → `RUNNING`) with the answer embedded in the fresh agent's prompt. Re-activation rewrites the marker to `<<RUNNING#id owner=agent job=pending since=... task: ...>>` — the same `job=pending` claim rule as step 2, since the fresh agent has no job id until it submits.
 6. On success an agent replaces its placeholder with final content and updates memory (`add-job`, `update-config-status`, `add-learning`, `task-note`/Outcome).
 
 ## Mode B — human-driven tab (interactive/tricky tasks)
@@ -123,7 +123,7 @@ The human opens a Worktrees tab in the sub-project's workdir and invokes on **on
 
 The tab session claims the placeholder (writes `<<RUNNING#id owner=tab:{name} job=pending ...>>`), then works **interactively** with the human — a normal chat-driven debug loop with full conversational bandwidth. On completion it replaces the placeholder and updates memory. Feedback is per-tab; the human schedules attention across tabs.
 
-- **Stamp-on-claim (never-planned worknote).** Ids are only stamped by planning scans, so on a fresh worknote a `#<id>` target may resolve to a placeholder that carries **no id yet**. If the target placeholder is un-stamped, Mode B stamps **only that one placeholder** with the next id (the `max`-over-three-sources rule under "Placeholder ids") as part of the claim write — it does not stamp the rest of the file (that stays a planning-scan job).
+- **Stamp-on-claim (never-planned worknote).** Ids are normally stamped by planning scans, so on a fresh worknote a `#<id>` target may match **no stamped placeholder or marker at all** — resolution is by id, and a never-planned worknote has nothing for `#<id>` to match. When the lookup finds no stamped `#<id>`, Mode B **lists the un-stamped placeholders** (quoted body snippets) and **asks the human to pick one**; it then stamps **only that one placeholder** with the next id (the `max`-over-three-sources rule under "Placeholder ids") as part of the claim write — it does not stamp the rest of the file (that stays a planning-scan job).
 - **Same task-file discipline as Mode A.** Mode B follows the Mode A skeleton's task-file discipline and promotion protocol: on claim, open a fresh Attempt via `task-note <id> ...` (creating `tasks/task-<id>.md` on first claim); record jobs/configs/learnings at the right level as work proceeds; on completion fill the task-file **Outcome** and promote any worknote-level conclusion to `MEMORY.md` with a pointer back to the task file. This gives a Mode B takeover/restart the same L3 state a Mode A restart relies on.
 
 ## Claiming protocol — what makes the modes coexist
@@ -157,7 +157,7 @@ If the marker is missing/cancelled or the worknote edit ultimately fails, the ag
 
 `/worknote-orchestrate <worknote> status` scans markers, cross-checks `jobs.md` (ledger authoritative for liveness), and prints **one table** — **no writes, no dispatches, no id-stamping**. This makes habitual re-invocation safe and backs the "worknote is the dashboard" claim with a reconciled view.
 
-Columns: **id · state · owner · job id · age**. States:
+Columns: **id · state · owner · job id · age**. An un-stamped `pending` placeholder has no id yet, so its `id` cell prints the sentinel `—`. States:
 
 | State | Meaning |
 |---|---|

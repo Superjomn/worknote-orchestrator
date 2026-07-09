@@ -3,6 +3,7 @@
 <!-- APPEND-ONLY entries. The `Answer:` field is the only mutable part of an entry. -->
 <!-- One entry per open question for the human. Every entry carries an evidence pointer. -->
 <!-- A BLOCKED placeholder marker in the worknote references the blocker id here. -->
+<!-- A re-blocked task appends a NEW entry with the same id; `answer-blocker` fills the latest one. -->
 
 ## Entry format
 
