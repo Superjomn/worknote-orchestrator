@@ -2,7 +2,7 @@
 name: worknote-orchestrate
 description: "Fill <<...>> placeholders in a human worknote by classifying each as fill-from-data or needs-work, then running the needs-work ones as jobs across parallel coordinator-driven agents (Mode A) or a human-driven tab (Mode B), with a claiming protocol, worknote-embedded state markers, and ONE batched human-feedback round. Layers on complete-report and records everything via research-memory. TRIGGER when: user runs /worknote-orchestrate, says \"fill worknote placeholders\", \"run worknote jobs\", \"orchestrate the worknote\", or wants to execute + fill placeholders that require running jobs."
 author: Chunwei Yan
-version: 0.1.0
+version: 0.2.0
 user_invocable: true
 ---
 
@@ -59,8 +59,8 @@ Placeholders may embed optional directives. These are **hints, not a DSL** — i
 Every marker and Mode B invocation uses a stable `#<id>`, so ids must be defined, not derived from scan order (scan-order ordinals shift the moment the human inserts a placeholder above an existing one).
 
 - **Stamp at plan approval.** When the coordinator finalizes the plan, it rewrites each still-pending placeholder to embed an id: `<<... body ...>>` → `<<#7 ... body ...>>`. This stays a valid `<<[^<>]+?>>` placeholder (no nested `<`/`>`).
-- **Monotonic, never reused.** The next id is `max(existing ids) + 1`, computed by scanning **all** `#N` occurrences in the worknote (pending, `RUNNING`, `BLOCKED`, and any in prose). Deleting a placeholder never frees its id.
-- **Human-added placeholders get stamped at the next scan.** A fresh `<<...>>` with no `#id` is assigned the next id on the following scan (plan approval or `status`).
+- **Monotonic, never reused.** The next id is `max(existing ids) + 1`, computed by scanning `#N` occurrences **inside `<<...>>` placeholders/markers only** (stamped pending, `RUNNING`, `BLOCKED`) — prose refs like a job `#8812345` or issue `#123` are ignored. Deleting a placeholder never frees its id.
+- **Human-added placeholders get stamped at the next scan.** A fresh `<<...>>` with no `#id` is assigned the next id on the following scan (the next planning scan — `status` never stamps).
 - Because ids are stable, **Mode B `#id` always resolves to exactly one placeholder** (or its `RUNNING`/`BLOCKED` marker), unambiguously.
 
 ## State machine & markers — the worknote is the dashboard
@@ -87,7 +87,7 @@ blocked+ans --> running  (re-activated with the answer embedded in a fresh agent
 blocked  --> running    (human takeover — Mode B in that workdir)
 running  --> running    (re-invocation resumes via the jobs.md ledger)
 running  --> cancelled  (human deleted the marker — see "Human edits mid-flight")
-running  --> re-dispatched (human edited the marker's task: — superseded, re-run with new text)
+running  --> running    (superseded: human edited task:, re-dispatched with new text)
 ```
 
 > **Markers stay valid `<<...>>` placeholders** — no nested `<` or `>` inside them — so `complete-report` (and this skill's own scan) still find them. Example markers:
@@ -106,7 +106,7 @@ One coordinator session runs the whole-file invocation:
 3. Placeholder-agents **never block on human input.** On a blocker they: write a structured `blockers.md` entry (via research-memory), flip the placeholder to `<<BLOCKED#id ...>>`, and return a status line.
 4. The coordinator collects completions and **serializes ALL pending blockers into a single `AskUserQuestion` round** — one interrupt instead of N scattered ones.
 5. Each answer is written into its blocker's `Answer:` field (and inline into the marker), and the affected placeholders are immediately re-dispatched (`BLOCKED` → `RUNNING`) with the answer embedded in the fresh agent's prompt.
-6. On success an agent replaces its placeholder with final content and updates memory (`add-job`, `update-config-status`, `add-learning`).
+6. On success an agent replaces its placeholder with final content and updates memory (`add-job`, `update-config-status`, `add-learning`, `task-note`/Outcome).
 
 ## Mode B — human-driven tab (interactive/tricky tasks)
 

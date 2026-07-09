@@ -1,8 +1,8 @@
 ---
 name: research-memory
-description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
+description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/task-note/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
 author: Chunwei Yan
-version: 0.1.0
+version: 0.2.0
 user_invocable: true
 ---
 
@@ -136,8 +136,9 @@ For `init`: create <dir>/<BaseName>.memory/ and copy the five template files fro
   <ABSOLUTE templates path — the main agent expands ${CLAUDE_PLUGIN_ROOT} before dispatch> ,
   substituting the project name into MEMORY.md's heading. (task.md is NOT copied at init.)
 For `link`: create ./research-memory -> <memory dir> in the current workdir, then append the symlink
-  name to the file printed by `git rev-parse --git-path info/exclude` (NOT .gitignore). Refuse if
-  `git rev-parse --git-dir` fails (not inside a git worktree).
+  name to the file printed by `git rev-parse --git-path info/exclude` (NOT .gitignore). Create that
+  file's parent directory if missing before appending (a fresh repo/worktree may lack `info/`). Refuse
+  if `git rev-parse --git-dir` fails (not inside a git worktree).
 For `task-note`: if tasks/task-<id>.md does not exist, create it from task.md (same absolute templates
   path) filling the Brief, then append <text> as a new Attempt section or Working-notes bullet.
 
