@@ -2,7 +2,7 @@
 name: research-memory
 description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/task-note/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
 author: Chunwei Yan
-version: 0.2.0
+version: 0.3.0
 user_invocable: true
 ---
 
@@ -83,9 +83,9 @@ working  --> superseded  (better config validated)
 
 Inherited from the `verl-worknote` skill. The point is to keep the **main agent's context lean** while memory files grow:
 
-- **All mutating actions** (`init`, `link`, `add-job`, `update-config-status`, `add-learning`, `task-note`) MUST be dispatched to a subagent via the `Agent` tool. The main agent never loads the full file to mutate it.
+- **All mutating actions** (`init`, `link`, `add-job`, `update-config-status`, `add-learning`, `task-note`, `add-blocker`, `answer-blocker`) MUST be dispatched to a subagent via the `Agent` tool. The main agent never loads the full file to mutate it.
 - **Main agents do only bounded reads**: `MEMORY.md` (≤150 lines) directly via `Read`; anything larger goes through a read subagent that returns only the answer.
-- **Mutable tables vs append-only ledgers**: `MEMORY.md`, `configs.md`, and `runbook.md` sections are rewritten in place; `jobs.md` and `blockers.md` entries are append-only (append new rows/entries; the only in-place edit permitted on an append-only file is filling a blocker's `Answer:`).
+- **Mutable tables vs append-only ledgers**: `MEMORY.md`, `configs.md`, and `runbook.md` sections are rewritten in place; `jobs.md` and `blockers.md` entries are append-only (append new rows/entries; the only in-place edit permitted on an append-only file is filling a blocker's `Answer:` via `answer-blocker`); `tasks/task-<id>.md`: Attempts append-only, Working notes mutable, Outcome write-once.
 - **Every fact carries a timestamp and an evidence pointer** (job id, log path, dashboard URL). A claim without evidence does not belong in memory — if the schema can't be filled, the fact isn't ready to record.
 - **One topic per file** minimizes concurrent-write collisions across tabs. Strict entry/row schemas (facts and tables, not prose dumps) keep the rare cross-tab merge trivial.
 - Subagents MUST return a **≤3-line** confirmation of the form `<action> done — <one-line diff hint>`. They MUST NOT echo file bodies (except `show-summary`, where the requested content IS the return, though `show-summary` is a direct read, not a dispatch).
@@ -100,6 +100,8 @@ Inherited from the `verl-worknote` skill. The point is to keep the **main agent'
 | `add-job <fields>` | Subagent | Append one row to `jobs.md`. |
 | `update-config-status <id> <status>` | Subagent | Update the row for `<id>` in `configs.md` (evidence pointer required). |
 | `add-learning <text>` | Subagent | Add `<text>` to `runbook.md` under the matching section. |
+| `add-blocker <fields>` | Subagent | Append one entry to `blockers.md` (existing schema). |
+| `answer-blocker <id> <text>` | Subagent | Fill the `Answer:` of entry `#id` — the one in-place edit permitted on `blockers.md`. |
 | `show-summary` | Main (direct `Read`, limit ~150) | Bounded direct read of `MEMORY.md`. |
 
 `init` copies templates from the plugin's `skills/research-memory/templates/` directory — the five files `MEMORY.md`, `configs.md`, `runbook.md`, `jobs.md`, `blockers.md`. `task.md` is **not** copied at init; per-task files are created lazily on first claim (see [[worknote-orchestrate]]). **The main agent resolves `${CLAUDE_PLUGIN_ROOT}` to an absolute path before filling the dispatch prompt** — a dispatched subagent does not inherit that variable, so the prompt must carry the concrete templates path. The subagent resolves the worknote's directory and base name, creates `<dir>/<BaseName>.memory/`, and copies each template file in verbatim (substituting the project name into `MEMORY.md`'s heading).
@@ -112,7 +114,7 @@ For any mutating action, dispatch a `general-purpose` Agent with a self-containe
 You are maintaining a shared research-memory store (machine-facing ground truth beside a human worknote).
 
 Memory dir: <absolute path to <Name>.memory/>
-Action: <init | link | add-job | update-config-status | add-learning | task-note>
+Action: <init | link | add-job | update-config-status | add-learning | task-note | add-blocker | answer-blocker>
 Target file: <MEMORY.md | configs.md | runbook.md | jobs.md | blockers.md | tasks/task-<id>.md — the file this action writes>
 Argument(s): <as provided>
 
@@ -141,6 +143,12 @@ For `link`: create ./research-memory -> <memory dir> in the current workdir, the
   if `git rev-parse --git-dir` fails (not inside a git worktree).
 For `task-note`: if tasks/task-<id>.md does not exist, create it from task.md (same absolute templates
   path) filling the Brief, then append <text> as a new Attempt section or Working-notes bullet.
+For `add-blocker`: append ONE new `### BLOCKED#<id> — <title>` entry at EOF of blockers.md (never
+  reorder or rewrite existing entries), filling every field of the entry schema including an evidence
+  pointer. Leave `Answer:` empty. Refuse if evidence is missing.
+For `answer-blocker`: fill ONLY the `Answer:` field of entry `#id` in blockers.md — the sole in-place
+  edit permitted on this append-only file. Refuse if the answer text is empty, no entry `#id` exists,
+  or that entry's `Answer:` is already non-empty.
 
 Timestamp: `date '+%Y-%m-%d %H:%M'`.
 
@@ -153,6 +161,8 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 - `link` when the current directory is **not inside a git worktree** (`git rev-parse --git-dir` fails) → refuse; there is no `info/exclude` to write.
 - `link` when `./research-memory` already exists → refuse; report where it points.
 - `add-job` or `update-config-status` **without an evidence pointer** → refuse; an unsupported fact does not belong in memory.
+- `add-blocker` **without an evidence pointer** → refuse; a blocker must cite what motivates the question.
+- `answer-blocker` with **empty answer text**, **no matching entry `#id`**, or an entry whose `Answer:` is **already filled** → refuse (the last preserves the append-only/write-once discipline).
 - `update-config-status` with a status outside `untested/working/failed/superseded`, or an illegal transition → refuse and name the legal transitions.
 - Empty argument for any `add-*`/`update-*` action → refuse.
 - `show-summary` / any action when the memory dir is missing → refuse; suggest `init`.
@@ -165,3 +175,5 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 4. `update-config-status` changed only the target row and carried an evidence pointer.
 5. `add-learning` landed under the correct runbook section; other sections unchanged.
 6. `task-note` created `tasks/task-<id>.md` from the template on first use and appended without rewriting a prior Attempt.
+7. `add-blocker` appended exactly one entry at EOF with every field filled (evidence included) and an empty `Answer:`; prior entries byte-identical.
+8. `answer-blocker` filled only the target entry's `Answer:` and refused if it was already answered.

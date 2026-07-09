@@ -9,7 +9,7 @@ _(what the project is actively working on right now — 1–5 bullets)_
 
 ## Validated conclusions
 _(facts confirmed by evidence; each bullet ends with a pointer + timestamp)_
-- _(e.g. "baseline config X reaches 1200 tok/s — job srun-8812345, wandb/run/abc, 2026-07-09")_
+- _(e.g. "baseline config X reaches 1200 tok/s — job srun-8812345, wandb/run/abc, 2026-07-09 → tasks/task-3.md")_
 
 ## Reference configs
 _(pointers to the current best / working configs; details live in configs.md)_
@@ -20,3 +20,4 @@ _(pointers to the current best / working configs; details live in configs.md)_
 - Runbook (how to submit/monitor/collect): `./runbook.md`
 - Job ledger (append-only): `./jobs.md`
 - Open blockers: `./blockers.md`
+- Per-task files: `./tasks/task-<id>.md`

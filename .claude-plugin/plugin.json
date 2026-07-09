@@ -1,7 +1,7 @@
 {
   "name": "worknote-orchestrator",
   "description": "Worknote-powered parallel job management: a shared machine-facing research memory (research-memory) plus a placeholder orchestrator (worknote-orchestrate) that fills <<...>> markers in a human worknote by running jobs across parallel agents and tabs with batched human feedback.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": { "name": "Chunwei Yan" },
   "repository": "https://github.com/Superjomn/worknote-orchestrator",
   "homepage": "https://github.com/Superjomn/worknote-orchestrator"
