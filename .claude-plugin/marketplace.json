@@ -1,0 +1,15 @@
+{
+  "name": "worknote-orchestrator",
+  "owner": {
+    "name": "Chunwei Yan"
+  },
+  "plugins": [
+    {
+      "name": "worknote-orchestrator",
+      "description": "Worknote-powered parallel job management: shared research-memory + worknote-orchestrate placeholder orchestrator with dual execution modes and batched human feedback.",
+      "version": "0.1.0",
+      "source": "./",
+      "author": { "name": "Chunwei Yan" }
+    }
+  ]
+}
