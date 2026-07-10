@@ -7,7 +7,7 @@
     {
       "name": "worknote-orchestrator",
       "description": "Worknote-powered parallel job management: shared research-memory + worknote-orchestrate placeholder orchestrator with dual execution modes and batched human feedback.",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "source": "./",
       "author": { "name": "Chunwei Yan" }
     }

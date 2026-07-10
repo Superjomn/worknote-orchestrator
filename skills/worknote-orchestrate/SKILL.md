@@ -2,7 +2,7 @@
 name: worknote-orchestrate
 description: "Fill <<...>> placeholders in a human worknote by classifying each as fill-from-data or needs-work, then running the needs-work ones as jobs across parallel coordinator-driven agents (Mode A) or a human-driven tab (Mode B), with a claiming protocol, worknote-embedded state markers, and ONE batched human-feedback round. Layers on complete-report and records everything via research-memory. TRIGGER when: user runs /worknote-orchestrate, says \"fill worknote placeholders\", \"run worknote jobs\", \"orchestrate the worknote\", or wants to execute + fill placeholders that require running jobs."
 author: Chunwei Yan
-version: 0.3.1
+version: 0.4.0
 user_invocable: true
 ---
 
@@ -106,10 +106,10 @@ running  --> running    (superseded: human edited task:, re-dispatched with new 
 
 One coordinator session runs the whole-file invocation:
 
-1. Scan + classify + plan-mode approval (per Classification and Risk-based selection below).
+1. Scan + classify + plan-mode approval (per Classification and Risk-based selection below). On plan approval, call research-memory `set-focus` with the active `#id`s + one-line intents so MEMORY.md "Current focus" reflects this round.
 2. Dispatch each approved needs-work placeholder to a **placeholder-agent** — a subagent instructed to `cd` into the target workdir first. Independent placeholders are dispatched **in parallel** (one message, multiple `Agent` calls). Before dispatching, flip the placeholder to `<<RUNNING#id owner=agent job=pending since=... task: ...>>` — the job id does not exist until the agent submits, so the coordinator writes `job=pending` and the agent fills the real id once it has one (skeleton step 3).
 3. Placeholder-agents **never block on human input.** On a blocker they: write a structured `blockers.md` entry via research-memory `add-blocker`, flip the placeholder to `<<BLOCKED#id ...>>`, and return a status line.
-4. The coordinator collects completions and **serializes ALL pending blockers into a single `AskUserQuestion` round** — one interrupt instead of N scattered ones.
+4. The coordinator collects completions and **serializes ALL pending blockers into a single `AskUserQuestion` round** — one interrupt instead of N scattered ones. In this same completion/blocker round it refreshes MEMORY.md "Current focus" via `set-focus` (drop finished `#id`s, keep the still-open/blocked ones).
 5. Each answer is written into its blocker's `Answer:` field via research-memory `answer-blocker <id> <text>` (and inline into the marker), and the affected placeholders are immediately re-dispatched (`BLOCKED` → `RUNNING`) with the answer embedded in the fresh agent's prompt. Re-activation rewrites the marker to `<<RUNNING#id owner=agent job=pending since=... task: ...>>` — the same `job=pending` claim rule as step 2, since the fresh agent has no job id until it submits.
 6. On success an agent replaces its placeholder with final content and updates memory (`add-job`, `update-config-status`, `add-learning`, `task-note`/Outcome).
 
@@ -124,7 +124,7 @@ The human opens a Worktrees tab in the sub-project's workdir and invokes on **on
 The tab session claims the placeholder (writes `<<RUNNING#id owner=tab:{name} job=pending ...>>`), then works **interactively** with the human — a normal chat-driven debug loop with full conversational bandwidth. On completion it replaces the placeholder and updates memory. Feedback is per-tab; the human schedules attention across tabs.
 
 - **Stamp-on-claim (never-planned worknote).** Ids are normally stamped by planning scans, so on a fresh worknote a `#<id>` target may match **no stamped placeholder or marker at all** — resolution is by id, and a never-planned worknote has nothing for `#<id>` to match. When the lookup finds no stamped `#<id>`, Mode B **lists the un-stamped placeholders** (quoted body snippets) and **asks the human to pick one**; it then stamps **only that one placeholder** with the next id (the `max`-over-three-sources rule under "Placeholder ids") as part of the claim write — it does not stamp the rest of the file (that stays a planning-scan job).
-- **Same task-file discipline as Mode A.** Mode B follows the Mode A skeleton's task-file discipline and promotion protocol: on claim, open a fresh Attempt via `task-note <id> ...` (creating `tasks/task-<id>.md` on first claim); record jobs/configs/learnings at the right level as work proceeds; on completion fill the task-file **Outcome** and promote any worknote-level conclusion to `MEMORY.md` with a pointer back to the task file. This gives a Mode B takeover/restart the same L3 state a Mode A restart relies on.
+- **Same task-file discipline as Mode A.** Mode B follows the Mode A skeleton's task-file discipline and promotion protocol: on claim, open a fresh Attempt via `task-note <id> ...` (creating `tasks/task-<id>.md` on first claim); record jobs/configs/learnings at the right level as work proceeds; on completion fill the task-file **Outcome** and promote any worknote-level conclusion via `promote-conclusion <id> <text>` (a pointer back to the task file), then READ BACK — bounded-grep MEMORY.md for `tasks/task-<id>.md` under "Validated conclusions" before writing the Outcome's `promoted:` line; on read-back failure retry the promote once, else write `promoted: FAILED (<reason>)` so drift stays visible. This gives a Mode B takeover/restart the same L3 state a Mode A restart relies on.
 
 ## Claiming protocol — what makes the modes coexist
 
@@ -168,6 +168,7 @@ Columns: **id · state · owner · job id · age**. An un-stamped `pending` plac
 | `stale-claim` | `RUNNING` marker but its ledger job is finished/failed/unknown — resumable/reassignable |
 | `orphaned-job` | ledger-RUNNING job with no marker in the worknote (human deleted it → cancel candidate) |
 | `done-but-unwritten` | memory/task-file shows the result recorded but the marker was never replaced |
+| `promotion-drift` | a task file's Outcome claims `promoted:` but MEMORY.md has no "Validated conclusions" bullet pointing at `tasks/task-<id>.md` — detected, never fixed, by `status` (like `done-but-unwritten`) |
 
 `status` never resolves any of these — it only reports. Acting on them happens in the next whole-file or `#id` invocation.
 
@@ -238,14 +239,20 @@ Steps:
    - `update-config-status <id> <status>` on a verified success/failure  [L2 configs].
    - `add-learning` for any reusable environment/pitfall knowledge  [L2 runbook].
    - `task-note <id> ...` for attempt outcome, next step, partial results  [L3 task file].
-   - A validated conclusion the whole worknote depends on → one MEMORY.md "Validated conclusions"
-     bullet with a pointer back to tasks/task-<id>.md  [L1]. Nothing else goes to L1.
+   - A validated conclusion the whole worknote depends on → `promote-conclusion <id> <text>` [L1]
+     (appends one MEMORY.md "Validated conclusions" bullet with a pointer back to tasks/task-<id>.md).
+     Nothing else goes to L1.
 5. Locate-by-id marker write (the human may have reworded/moved/deleted your marker):
    re-grep the worknote (multiline) for `<<(RUNNING|BLOCKED)#<id>(\s[^<>]*)?>>` — YOUR marker only —
    read a fresh ±20-line window, and Edit with the freshly-read exact string (one atomic edit).
    On Edit failure: re-grep once and retry.
 6a. On SUCCESS: replace your located marker with the FINAL content (conclusions only; details stay
-    in memory). Fill the task-file Outcome (conclusion + what was promoted).
+    in memory). If the worknote depends on a validated conclusion, promote it via
+    `promote-conclusion <id> <text>`, then READ BACK: bounded-grep MEMORY.md for `tasks/task-<id>.md`
+    under "Validated conclusions". Only once the read-back confirms the bullet landed, fill the
+    task-file Outcome's `promoted:` line. If the read-back fails, retry `promote-conclusion` once;
+    if it still fails, write `promoted: FAILED (<reason>)` in the Outcome so the drift is VISIBLE
+    rather than silently claimed. Fill the rest of the task-file Outcome (conclusion + what was promoted).
 6b. On BLOCKER: call research-memory `add-blocker` to append a blockers.md entry (id, timestamp,
     workdir, placeholder ref, task file, Question, Evidence), flip your located marker to
     `<<BLOCKED#id owner=agent ... Q: {question}>>` (keep it a valid <<...>> placeholder — no nested
@@ -261,7 +268,7 @@ Steps:
 | Role | Responsibilities |
 |---|---|
 | **Human** | Owns worknote structure + prose; answers batched blockers; runs Mode B for tricky work; decides mode overrides at plan time. |
-| **Coordinator** (whole-file session) | Scan, id-stamp, classify, plan; reconcile markers vs `jobs.md` (cancel/supersede); dispatch placeholder-agents; batch blocker feedback into ONE question round; fill fill-from-data placeholders; re-dispatch answered/superseded blockers; surface any `done (worknote not updated)` lines in the summary. |
+| **Coordinator** (whole-file session) | Scan, id-stamp, classify, plan; set MEMORY.md "Current focus" via `set-focus` at plan approval and refresh it in the completion/blocker round; reconcile markers vs `jobs.md` (cancel/supersede); dispatch placeholder-agents; batch blocker feedback into ONE question round; fill fill-from-data placeholders; re-dispatch answered/superseded blockers; surface any `done (worknote not updated)` lines in the summary. |
 | **Placeholder-agent** (subagent, per workdir) | `cd` workdir; bounded-read memory + `tasks/task-<id>.md`; open a fresh Attempt; run jobs; record everything via research-memory (promotion protocol); locate-by-id then replace its placeholder on success or flip to `BLOCKED`; never block on human input; never lose a result if the marker vanished. |
 | **Shared memory** ([[research-memory]]) | Ground truth: configs, runbook, job ledger, blockers — the only cross-session channel. |
 
