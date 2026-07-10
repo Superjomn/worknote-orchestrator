@@ -2,7 +2,7 @@
 name: research-memory
 description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/task-note/add-blocker/answer-blocker/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
 author: Chunwei Yan
-version: 0.3.1
+version: 0.4.0
 user_invocable: true
 ---
 
@@ -63,7 +63,8 @@ Three explicit levels keep `MEMORY.md` small by construction: only promoted, evi
 - config verdict proven → `update-config-status` (L2 `configs.md`).
 - reusable execution learning/pitfall → `add-learning` (L2 `runbook.md`).
 - job submitted / status change → `add-job` (L2 `jobs.md`).
-- **validated conclusion the overall worknote depends on** → one bullet in `MEMORY.md` "Validated conclusions" (L1), with a pointer back to `tasks/task-<id>.md`.
+- **validated conclusion the overall worknote depends on** → `promote-conclusion` (L1): one bullet in `MEMORY.md` "Validated conclusions", with a pointer back to `tasks/task-<id>.md`.
+- **current-focus shift** → `set-focus` (L1): rewrite the `MEMORY.md` "Current focus" bullets.
 
 Everything else stays in the task file. `MEMORY.md` stays ≤150 lines because it only ever receives promoted bullets. Completed task files are kept as a cheap archive — neatness is enforced at L1 by curation, not by deleting L3.
 
@@ -83,7 +84,7 @@ working  --> superseded  (better config validated)
 
 Inherited from the `verl-worknote` skill. The point is to keep the **main agent's context lean** while memory files grow:
 
-- **All mutating actions** (`init`, `link`, `add-job`, `update-config-status`, `add-learning`, `task-note`, `add-blocker`, `answer-blocker`) MUST be dispatched to a subagent via the `Agent` tool. The main agent never loads the full file to mutate it.
+- **All mutating actions** (`init`, `link`, `add-job`, `update-config-status`, `add-learning`, `task-note`, `add-blocker`, `answer-blocker`, `promote-conclusion`, `set-focus`) MUST be dispatched to a subagent via the `Agent` tool. The main agent never loads the full file to mutate it.
 - **Main agents do only bounded reads**: `MEMORY.md` (≤150 lines) directly via `Read`; anything larger goes through a read subagent that returns only the answer.
 - **Mutable tables vs append-only ledgers**: `MEMORY.md`, `configs.md`, and `runbook.md` sections are rewritten in place; `jobs.md` and `blockers.md` entries are append-only (append new rows/entries; the only in-place edit permitted on an append-only file is filling a blocker's `Answer:` via `answer-blocker`); `tasks/task-<id>.md`: Attempts append-only, Working notes mutable, Outcome write-once.
 - **Every fact carries a timestamp and an evidence pointer** (job id, log path, dashboard URL). A claim without evidence does not belong in memory — if the schema can't be filled, the fact isn't ready to record.
@@ -98,10 +99,12 @@ Inherited from the `verl-worknote` skill. The point is to keep the **main agent'
 | `link` | Subagent | Create `./research-memory` symlink in the current workdir + add it to git's `info/exclude` (resolved via `git rev-parse --git-path info/exclude`). |
 | `task-note <id> <text>` | Subagent | Append `<text>` to `tasks/task-<id>.md` (Attempts or Working notes); create the file from `task.md` on first use. |
 | `add-job <fields>` | Subagent | Append one row to `jobs.md`. |
-| `update-config-status <id> <status>` | Subagent | Update the row for `<id>` in `configs.md` (evidence pointer required). |
+| `update-config-status <id> <status>` | Subagent | Update the row for `<id>` in `configs.md` (evidence pointer required). When the transition lands on `working` or `superseded`, the same dispatch also mirrors the matching pointer line in `MEMORY.md` "Reference configs" (add or replace `<id> → configs.md#... (status: ...)`). |
 | `add-learning <text>` | Subagent | Add `<text>` to `runbook.md` under the matching section. |
 | `add-blocker <fields>` | Subagent | Append one entry to `blockers.md` (existing schema). |
 | `answer-blocker <id> <text>` | Subagent | Fill the `Answer:` of the **latest (last)** entry for `#id` — the one in-place edit permitted on `blockers.md`. |
+| `promote-conclusion <id> <text>` | Subagent | Append ONE bullet under `MEMORY.md` "Validated conclusions", ending with an evidence pointer + timestamp + `→ tasks/task-<id>.md`. Requires an existing `tasks/task-<id>.md`. Keep `MEMORY.md` ≤150 lines (curate/compress oldest bullets if needed, never drop pointers). |
+| `set-focus <text>` | Subagent | Rewrite `MEMORY.md` "Current focus" section in place (1–5 bullets). |
 | `show-summary` | Main (direct `Read`, limit ~150) | Bounded direct read of `MEMORY.md`. |
 
 `init` copies templates from the plugin's `skills/research-memory/templates/` directory — the five files `MEMORY.md`, `configs.md`, `runbook.md`, `jobs.md`, `blockers.md`. `task.md` is **not** copied at init; per-task files are created lazily on first claim (see [[worknote-orchestrate]]). **The main agent resolves `${CLAUDE_PLUGIN_ROOT}` to an absolute path before filling the dispatch prompt** — a dispatched subagent does not inherit that variable, so the prompt must carry the concrete templates path. The subagent resolves the worknote's directory and base name, creates `<dir>/<BaseName>.memory/`, and copies each template file in verbatim (substituting the project name into `MEMORY.md`'s heading).
@@ -114,8 +117,8 @@ For any mutating action, dispatch a `general-purpose` Agent with a self-containe
 You are maintaining a shared research-memory store (machine-facing ground truth beside a human worknote).
 
 Memory dir: <absolute path to <Name>.memory/>
-Action: <init | link | add-job | update-config-status | add-learning | task-note | add-blocker | answer-blocker>
-Target file: <MEMORY.md | configs.md | runbook.md | jobs.md | blockers.md | tasks/task-<id>.md — the file this action writes>
+Action: <init | link | add-job | update-config-status | add-learning | task-note | add-blocker | answer-blocker | promote-conclusion | set-focus>
+Target file: <MEMORY.md | configs.md | runbook.md | jobs.md | blockers.md | tasks/task-<id>.md — the file this action writes (update-config-status on working/superseded ALSO touches MEMORY.md; promote-conclusion and set-focus write MEMORY.md)>
 Argument(s): <as provided>
 
 File format (do not violate):
@@ -124,6 +127,10 @@ File format (do not violate):
   existing rows. The ONLY in-place edit allowed is filling a blocker's `Answer:` field.
 - tasks/task-<id>.md — Attempts are APPEND-ONLY (never rewrite a prior `### Attempt N`); Working notes
   are mutable scratch; Outcome is filled once.
+
+Template-hygiene rule (all actions): when writing the FIRST real row/bullet/entry into a section or
+table that still contains an italic `_( … )_` template example, delete that example line as part of
+the SAME edit. Never leave a template example beside real data.
 
 Row/entry schema for this action (fill EVERY column; refuse if you cannot):
 <paste the exact target schema, e.g.:
@@ -150,6 +157,19 @@ For `answer-blocker`: fill ONLY the `Answer:` field of the LATEST (last) entry f
   blockers.md — a re-blocked task appends a second `### BLOCKED#<id>` entry, so target the most
   recent one. This is the sole in-place edit permitted on this append-only file. Refuse if the answer
   text is empty, no entry `#id` exists, or ALL entries for `#id` already have a non-empty `Answer:`.
+For `update-config-status`: after editing the `<id>` row in configs.md, if the NEW status is `working`
+  or `superseded`, also mirror the pointer in MEMORY.md "Reference configs" — add or replace the line
+  for `<id>` as `<id> → configs.md#<anchor> (status: <status>)`. Do not touch MEMORY.md for the other
+  transitions.
+For `promote-conclusion`: append ONE bullet under MEMORY.md "Validated conclusions". The text MUST
+  carry an evidence pointer (job id, log path, dashboard URL); the bullet MUST end with the timestamp
+  and `→ tasks/task-<id>.md`. REFUSE if the text has no evidence pointer, or if tasks/task-<id>.md
+  does not exist (a conclusion must trace back to a real task file). If a Validated-conclusions bullet
+  already points at `tasks/task-<id>.md`, UPDATE that bullet in place rather than appending a second.
+  Keep MEMORY.md ≤150 lines — if near the limit, compress/curate the OLDEST bullets, never drop their
+  pointers.
+For `set-focus`: rewrite ONLY the "Current focus" section of MEMORY.md in place with the supplied
+  1–5 bullets; touch no other section. Refuse if the text is empty.
 
 Timestamp: `date '+%Y-%m-%d %H:%M'`.
 
@@ -165,6 +185,9 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 - `add-blocker` **without an evidence pointer** → refuse; a blocker must cite what motivates the question.
 - `answer-blocker` with **empty answer text**, **no matching entry `#id`**, or where **all** entries for `#id` are **already filled** → refuse (the last preserves the append-only/write-once discipline). When a placeholder was re-blocked, `answer-blocker` fills the **latest** `#id` entry.
 - `update-config-status` with a status outside `untested/working/failed/superseded`, or an illegal transition → refuse and name the legal transitions.
+- `promote-conclusion` **without an evidence pointer**, or when **`tasks/task-<id>.md` is missing** → refuse; a promoted conclusion must trace back to a real task file and cite its evidence.
+- `promote-conclusion` when a Validated-conclusions bullet **already points at `tasks/task-<id>.md`** → do NOT append a duplicate; update that bullet in place.
+- `set-focus` with **empty text** → refuse.
 - Empty argument for any `add-*`/`update-*` action → refuse.
 - `show-summary` / any action when the memory dir is missing → refuse; suggest `init`.
 
@@ -178,3 +201,6 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 6. `task-note` created `tasks/task-<id>.md` from the template on first use and appended without rewriting a prior Attempt.
 7. `add-blocker` appended exactly one entry at EOF with every field filled (evidence included) and an empty `Answer:`; prior entries byte-identical.
 8. `answer-blocker` filled only the **latest** `#id` entry's `Answer:` and refused only if **all** entries for `#id` were already answered.
+9. `promote-conclusion` appended exactly one bullet ending with an evidence pointer + timestamp + `→ tasks/task-<id>.md`, removed any template example bullet in that section, and updated in place (not duplicated) when a bullet for that task file already existed.
+10. `set-focus` rewrote only the "Current focus" section; every other section byte-identical.
+11. `update-config-status` landing on `working`/`superseded` mirrored the pointer in MEMORY.md "Reference configs" (added or replaced the `<id>` line) and left MEMORY.md untouched for other transitions.

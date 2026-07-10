@@ -11,7 +11,7 @@ Research and engineering work is a loop run many times in parallel: submit a lon
 
 Two skills:
 
-- **`research-memory`** — lifecycle for the shared store beside a worknote (`init`, `link`, `task-note`, `add-job`, `update-config-status`, `add-learning`, `add-blocker`, `answer-blocker`, `show-summary`). All writes go through subagents to keep the main context lean.
+- **`research-memory`** — lifecycle for the shared store beside a worknote (`init`, `link`, `task-note`, `add-job`, `update-config-status`, `add-learning`, `add-blocker`, `answer-blocker`, `promote-conclusion`, `set-focus`, `show-summary`). All writes go through subagents to keep the main context lean.
 - **`worknote-orchestrate`** — scans the worknote, stamps each placeholder with a stable `#id`, classifies it as *fill-from-data* or *needs-work*, and runs the needs-work ones either as **coordinator-driven parallel agents** (Mode A) or a **human-driven tab** (Mode B — which, on a never-planned worknote, stamps just its own placeholder on claim). State lives in the worknote itself as `<<RUNNING#id ...>>` / `<<BLOCKED#id ...>>` markers, so the worknote is the dashboard. The human may edit/reword/delete placeholders mid-flight — agents tolerate it (memory is ground truth; the worknote write is best-effort). `/worknote-orchestrate <worknote> status` prints a read-only reconciled dashboard. Per-task restartable state lives in `tasks/task-<id>.md` so a re-dispatch resumes instead of re-deriving. Layers on `complete-report`.
 
 ## Install
