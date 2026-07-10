@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""mockjob — a GPU-free, deterministic stand-in for a SLURM/wandb-style scheduler.
+
+Emulates the exact contract the research-memory runbook's Monitor/Collect steps assume:
+
+  * `submit` allocates a job id and prints ONLY that id — the submitter captures it
+    verbatim into the jobs.md `add-job` row and the worknote marker's `job=` field.
+  * `status <jobid>` resolves an id -> state WITHOUT the submitter's context, because
+    state lives on disk keyed by the id. This is what makes GPU-free end-to-end
+    reconciliation (and stale-claim detection) possible: any later session can resolve
+    a job it never submitted.
+  * `collect <jobid>` returns a metric on success, an error on failure.
+
+Determinism is MEMORYLESS: every `status`/`collect` for a job returns the SAME answer
+regardless of how many times it is called or which model calls it. Outcome is a pure
+function of the job's `plan`, chosen at submit time. Retries never change outcomes.
+
+State dir: $MOCKJOB_STATE_DIR, else <memory-dir>/.mockjob/ where <memory-dir> is inferred
+from ./research-memory (the fixed per-workdir symlink). Contains:
+  seq                 monotonic counter (text int)
+  jobs/<jobid>.json   {id, purpose, plan, metric, submitted_at, result}
+
+Plan -> outcome mapping (MEMORYLESS):
+
+  | plan          | status returns | collect returns          | drives                       |
+  |---------------|----------------|--------------------------|------------------------------|
+  | fast-ok       | finished       | metric line              | happy path                   |
+  | fail          | failed         | reason, exit 5           | BLOCKED path                 |
+  | hang-running  | running        | not-ready, exit 4        | stale-claim (live-but-stuck) |
+  | (no statefile)| unknown, exit3 | unknown, exit 3          | stale-claim (unresolvable)   |
+
+A marker left at `job=pending` (never submitted) is the third stale-claim flavor and needs
+no job file at all — the ledger simply has no id to resolve.
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+VALID_PLANS = {"fast-ok", "fail", "hang-running"}
+DEFAULT_METRIC = "throughput=1234.5 tok/s"
+FAIL_REASON = "OOM at dp=8"
+
+
+def state_dir() -> Path:
+    env = os.environ.get("MOCKJOB_STATE_DIR")
+    if env:
+        return Path(env)
+    # Infer from the fixed per-workdir symlink the runbook guarantees.
+    rm = Path("research-memory")
+    if rm.exists():
+        return rm.resolve() / ".mockjob"
+    # Fall back to CWD so `list`/`reset` still work from a memory dir directly.
+    return Path(".mockjob")
+
+
+def jobs_dir(sd: Path) -> Path:
+    return sd / "jobs"
+
+
+def next_seq(sd: Path) -> int:
+    seq_file = sd / "seq"
+    n = int(seq_file.read_text().strip()) if seq_file.exists() else 0
+    n += 1
+    seq_file.write_text(str(n))
+    return n
+
+
+def job_path(sd: Path, jobid: str) -> Path:
+    return jobs_dir(sd) / f"{jobid}.json"
+
+
+def load_job(sd: Path, jobid: str):
+    p = job_path(sd, jobid)
+    if not p.exists():
+        return None
+    return json.loads(p.read_text())
+
+
+def cmd_submit(args) -> int:
+    sd = state_dir()
+    jobs_dir(sd).mkdir(parents=True, exist_ok=True)
+    plan = args.plan or "fast-ok"
+    if plan not in VALID_PLANS:
+        print(f"error: unknown plan '{plan}' (valid: {', '.join(sorted(VALID_PLANS))})",
+              file=sys.stderr)
+        return 2
+    seq = next_seq(sd)
+    jobid = f"mock-{seq:04d}"
+    metric = args.metric if args.metric is not None else DEFAULT_METRIC
+    if isinstance(metric, float) or (isinstance(metric, str) and _is_number(metric)):
+        metric = f"throughput={metric} tok/s"
+    record = {
+        "id": jobid,
+        "purpose": args.purpose,
+        "plan": plan,
+        "metric": metric,
+        "submitted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "result": None,
+    }
+    job_path(sd, jobid).write_text(json.dumps(record, indent=2))
+    # Print ONLY the job id — the agent captures this verbatim.
+    print(jobid)
+    return 0
+
+
+def _is_number(s: str) -> bool:
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _state_for_plan(plan: str) -> str:
+    return {
+        "fast-ok": "finished",
+        "fail": "failed",
+        "hang-running": "running",
+    }[plan]
+
+
+def cmd_status(args) -> int:
+    sd = state_dir()
+    job = load_job(sd, args.jobid)
+    if job is None:
+        print("unknown")
+        return 3
+    print(_state_for_plan(job["plan"]))
+    return 0
+
+
+def cmd_collect(args) -> int:
+    sd = state_dir()
+    job = load_job(sd, args.jobid)
+    if job is None:
+        print("unknown")
+        return 3
+    state = _state_for_plan(job["plan"])
+    if state == "finished":
+        print(job["metric"])
+        return 0
+    if state == "failed":
+        print(FAIL_REASON)
+        return 5
+    # running / anything not terminal
+    print("not-ready")
+    return 4
+
+
+def cmd_list(args) -> int:
+    sd = state_dir()
+    jd = jobs_dir(sd)
+    if not jd.exists():
+        return 0
+    for p in sorted(jd.glob("*.json")):
+        job = json.loads(p.read_text())
+        print(f"{job['id']}\t{_state_for_plan(job['plan'])}\t{job['plan']}\t{job['purpose']}")
+    return 0
+
+
+def cmd_reset(args) -> int:
+    sd = state_dir()
+    if sd.exists():
+        import shutil
+        shutil.rmtree(sd)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="mockjob", description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("submit", help="allocate a job id and print it")
+    s.add_argument("--purpose", required=True, help="human-readable job purpose")
+    s.add_argument("--plan", default=None,
+                   help=f"deterministic outcome plan ({', '.join(sorted(VALID_PLANS))}); default fast-ok")
+    s.add_argument("--metric", default=None,
+                   help="metric string or bare number returned by collect on success")
+    s.set_defaults(func=cmd_submit)
+
+    st = sub.add_parser("status", help="resolve a job id to one state token")
+    st.add_argument("jobid")
+    st.set_defaults(func=cmd_status)
+
+    c = sub.add_parser("collect", help="pull the metric (finished) or reason (failed)")
+    c.add_argument("jobid")
+    c.set_defaults(func=cmd_collect)
+
+    sub.add_parser("list", help="debug: list known jobs").set_defaults(func=cmd_list)
+    sub.add_parser("reset", help="debug: wipe the state dir").set_defaults(func=cmd_reset)
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

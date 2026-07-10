@@ -3,3 +3,9 @@ __pycache__/
 .pytest_cache/
 .claude/settings.local.json
 *.swp
+
+# examples/ run artifacts — local workflow state, never committed.
+# Per-workdir research-memory symlink (also registered in git info/exclude by setup.sh).
+examples/*/workdir*/research-memory
+# Mock-scheduler state, keyed under each scenario's seeded memory store.
+examples/*/*.memory/.mockjob/
