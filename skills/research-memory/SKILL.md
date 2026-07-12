@@ -1,8 +1,8 @@
 ---
 name: research-memory
-description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/task-note/add-blocker/answer-blocker/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
+description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/task-note/add-blocker/answer-blocker/promote-conclusion/set-focus/show-summary, /research-memory, \"research memory\", \"shared worknote memory\", or wants to record a job/config/learning/blocker beside a worknote."
 author: Chunwei Yan
-version: 0.4.0
+version: 0.5.0
 user_invocable: true
 ---
 
@@ -26,7 +26,11 @@ Memory lives **next to the worknote**, in a sibling directory named after it:
   MyStudy.md               # the human worknote
   MyStudy.memory/          # this store
     MEMORY.md  configs.md  runbook.md  jobs.md  blockers.md
+    tasks/                 # per-task L3 files, created lazily
+    scripts/               # OPTIONAL: reusable collection/analysis helpers
 ```
+
+The memory dir holds **only** the five files + `tasks/` + an optional `scripts/` directory. `scripts/` is the one sanctioned home for reusable collection/analysis helper artifacts (parsers, tps extractors, plotting); every script MUST be referenced from `runbook.md` §Collect so it is discoverable. Nothing else lives at the memory root — a stray helper at the root is a defect, move it into `scripts/` and cite it from the runbook.
 
 Each participating working directory gets a symlink so any session reaches ground truth at a fixed path:
 
@@ -44,9 +48,10 @@ Each participating working directory gets a symlink so any session reaches groun
 | `MEMORY.md` | Mutable, rewritten in place, **≤150 lines** | Index + current ground truth: validated conclusions, pointers to reference/working configs, current focus. The only file main agents read routinely. |
 | `configs.md` | Mutable table | Status of each config/recipe: id or path, owning workdir, status, key knobs, evidence pointer. |
 | `runbook.md` | Mutable, sectioned | Execution learnings: Environment / Submit / Monitor / Collect / Pitfalls. |
-| `jobs.md` | **Append-only ledger** | One row per job: timestamp, id, purpose, config ref, owner, status, result pointer. Status updates **append a new row** referencing the job id; never rewrite or reorder. |
+| `jobs.md` | **Append-only ledger** | One row per job: timestamp, id, purpose, config ref, owner, status, result pointer. Status updates **append a new row** referencing the job id; never rewrite or reorder. A terminal status change (`finished`/`failed`/`cancelled`) appends **its own row for that job id** — never fold job X's terminal state into job Y's row (each job id's lifecycle is a self-contained chain of rows). |
 | `blockers.md` | Append-only entries, mutable `Answer:` only | Open questions for the human: id, timestamp, workdir, placeholder ref, task file, Question, Evidence, `Answer:`. |
 | `tasks/task-<id>.md` | Attempts append-only; Working notes mutable; Outcome write-once | Per-task restartable working state, one file per placeholder id. Created lazily on first claim. Read only by the owner/restarter of `#id`. |
+| `scripts/` (optional) | Mutable helper files | Reusable collection/analysis helpers (parsers, extractors). Only sanctioned non-file-list artifact at the memory root; every script MUST be referenced from `runbook.md` §Collect. |
 
 ## Memory hierarchy — detail lives low, curated facts flow up
 
@@ -80,6 +85,8 @@ working  --> superseded  (better config validated)
 
 > A config marked `working` in `configs.md` is the signal that a recipe is safe to parallelize (Mode A in [[worknote-orchestrate]]). Memory quality directly buys parallelism.
 
+**`working` verdict semantics (CRITICAL).** A `working` verdict requires the cited evidence job to have reached a **successful terminal state for the config's actual purpose** — not merely that some sub-effect was observed. A run that crashed or failed is `failed`, even if a sub-effect was verified along the way (e.g. "the reuse path engaged" observed before an OOM). Record that verified sub-effect in the config's key-knobs or the evidence pointer, **not** in the status: a crashed job never yields `working`. Concretely, a `working` verdict requires the cited evidence job's **latest `jobs.md` row** to be `finished` (the verified-success terminal); if that row is `failed`, `cancelled`, still `submitted`/`running`, or absent/unresolvable, the transition is illegitimate → refuse, naming the actual state.
+
 ## Context-saving contract (CRITICAL)
 
 Inherited from the `verl-worknote` skill. The point is to keep the **main agent's context lean** while memory files grow:
@@ -98,12 +105,12 @@ Inherited from the `verl-worknote` skill. The point is to keep the **main agent'
 | `init <worknote-path>` | Subagent | Create `<Worknote-Name>.memory/` beside the worknote and copy the five template files into it. |
 | `link` | Subagent | Create `./research-memory` symlink in the current workdir + add it to git's `info/exclude` (resolved via `git rev-parse --git-path info/exclude`). |
 | `task-note <id> <text>` | Subagent | Append `<text>` to `tasks/task-<id>.md` (Attempts or Working notes); create the file from `task.md` on first use. |
-| `add-job <fields>` | Subagent | Append one row to `jobs.md`. |
-| `update-config-status <id> <status>` | Subagent | Update the row for `<id>` in `configs.md` (evidence pointer required). When the transition lands on `working` or `superseded`, the same dispatch also mirrors the matching pointer line in `MEMORY.md` "Reference configs" (add or replace `<id> → configs.md#... (status: ...)`). |
+| `add-job <fields>` | Subagent | Append one row to `jobs.md` (status ∈ submitted/running/finished/failed/cancelled; a terminal status appends its own row per job id; an unregistered `config ref` auto-adds an `untested` `configs.md` row in the same dispatch). |
+| `update-config-status <id> <status>` | Subagent | Update the row for `<id>` in `configs.md` (evidence pointer required; a `working` verdict requires the cited evidence job's latest `jobs.md` row to be `finished`). Mirror the `MEMORY.md` "Reference configs" line whenever the NEW status is `working`/`superseded` (add or replace `<id> → configs.md#... (status: ...)`) **OR** the OLD status was `working`/`superseded` (update the existing line in place to the new status — the default; drop the line only when a successor config's mirror line replaces it (supersede chain) or the human explicitly asked for its removal). |
 | `add-learning <text>` | Subagent | Add `<text>` to `runbook.md` under the matching section. |
 | `add-blocker <fields>` | Subagent | Append one entry to `blockers.md` (existing schema). |
 | `answer-blocker <id> <text>` | Subagent | Fill the `Answer:` of the **latest (last)** entry for `#id` — the one in-place edit permitted on `blockers.md`. |
-| `promote-conclusion <id> <text>` | Subagent | Append ONE bullet under `MEMORY.md` "Validated conclusions", ending with an evidence pointer + timestamp + `→ tasks/task-<id>.md`. Requires an existing `tasks/task-<id>.md`. Keep `MEMORY.md` ≤150 lines (curate/compress oldest bullets if needed, never drop pointers). |
+| `promote-conclusion <id> <text>` | Subagent | Append ONE bullet under `MEMORY.md` "Validated conclusions", ending with an evidence pointer + timestamp + `→ tasks/task-<id>.md` (updates in place if a bullet for that task file already exists). Requires an existing `tasks/task-<id>.md`. Keep `MEMORY.md` ≤150 lines (curate/compress oldest bullets if needed, never drop pointers). |
 | `set-focus <text>` | Subagent | Rewrite `MEMORY.md` "Current focus" section in place (1–5 bullets). |
 | `show-summary` | Main (direct `Read`, limit ~150) | Bounded direct read of `MEMORY.md`. |
 
@@ -118,7 +125,7 @@ You are maintaining a shared research-memory store (machine-facing ground truth 
 
 Memory dir: <absolute path to <Name>.memory/>
 Action: <init | link | add-job | update-config-status | add-learning | task-note | add-blocker | answer-blocker | promote-conclusion | set-focus>
-Target file: <MEMORY.md | configs.md | runbook.md | jobs.md | blockers.md | tasks/task-<id>.md — the file this action writes (update-config-status on working/superseded ALSO touches MEMORY.md; promote-conclusion and set-focus write MEMORY.md)>
+Target file: <MEMORY.md | configs.md | runbook.md | jobs.md | blockers.md | tasks/task-<id>.md — the file this action writes (update-config-status ALSO touches MEMORY.md when the old OR new status is working/superseded; add-job ALSO touches configs.md when its config ref is unregistered; promote-conclusion and set-focus write MEMORY.md)>
 Argument(s): <as provided>
 
 File format (do not violate):
@@ -134,7 +141,7 @@ the SAME edit. Never leave a template example beside real data.
 
 Row/entry schema for this action (fill EVERY column; refuse if you cannot):
 <paste the exact target schema, e.g.:
- jobs.md row: | timestamp | job id | purpose | config ref | owner | status | result ptr |
+ jobs.md row: | timestamp | job id | purpose | config ref | owner | status | result ptr |  (status ∈ submitted/running/finished/failed/cancelled)
  configs.md row: | id/path | workdir | status | key knobs | evidence |  (status ∈ untested/working/failed/superseded)
  blockers.md entry: ### BLOCKED#<id> — <title> / timestamp / workdir / placeholder ref / task file / Question / Evidence / Answer:
  tasks/task-<id>.md: Brief / Attempts (### Attempt N: tried, jobs, outcome, next step) / Working notes / Outcome
@@ -150,6 +157,21 @@ For `link`: create ./research-memory -> <memory dir> in the current workdir, the
   if `git rev-parse --git-dir` fails (not inside a git worktree).
 For `task-note`: if tasks/task-<id>.md does not exist, create it from task.md (same absolute templates
   path) filling the Brief, then append <text> as a new Attempt section or Working-notes bullet.
+For `add-job`: append ONE row at EOF of jobs.md. The `status` MUST be one of
+  submitted/running/finished/failed/cancelled — refuse and name the invented value otherwise
+  (`unknown` is a resolution result, never a stored status). A terminal status change
+  (finished/failed/cancelled) appends its OWN row for that job id — never fold this job's terminal
+  state into another job's row. If the `config ref` names a config that has NO row in configs.md,
+  add an `untested` configs.md row for it in this SAME dispatch (evidence: the job being recorded)
+  so every `config ref` resolves to a real configs.md entry. Normalize the ref to its anchor when
+  minting that row: a ref `configs.md#pmt32` yields a configs.md row whose id is `pmt32`, and the
+  row's evidence cites the job id being recorded (e.g. `srun-800`).
+For `add-learning`: pick the runbook.md section the fact belongs to and add it there — Environment
+  (setup prerequisites / env vars / images), Submit (launch commands), Monitor (job-id → status
+  resolution), Collect (result extraction / parse steps / helper scripts), Pitfalls (a gotcha + its
+  fix, ONLY). Do NOT bury an environment/submit/monitor/collect fact inside a Pitfalls entry. If the
+  learning spans multiple topics, SPLIT it into one entry per matching section rather than dumping it
+  all into one.
 For `add-blocker`: append ONE new `### BLOCKED#<id> — <title>` entry at EOF of blockers.md (never
   reorder or rewrite existing entries), filling every field of the entry schema including an evidence
   pointer. Leave `Answer:` empty. Refuse if evidence is missing.
@@ -157,10 +179,18 @@ For `answer-blocker`: fill ONLY the `Answer:` field of the LATEST (last) entry f
   blockers.md — a re-blocked task appends a second `### BLOCKED#<id>` entry, so target the most
   recent one. This is the sole in-place edit permitted on this append-only file. Refuse if the answer
   text is empty, no entry `#id` exists, or ALL entries for `#id` already have a non-empty `Answer:`.
-For `update-config-status`: after editing the `<id>` row in configs.md, if the NEW status is `working`
-  or `superseded`, also mirror the pointer in MEMORY.md "Reference configs" — add or replace the line
-  for `<id>` as `<id> → configs.md#<anchor> (status: <status>)`. Do not touch MEMORY.md for the other
-  transitions.
+For `update-config-status`: a `working` verdict requires the cited evidence job's LATEST jobs.md row
+  to be `finished` — REFUSE unless it is; `failed`, `cancelled`, still-`submitted`/`running`, or
+  absent/unresolvable all refuse, naming the actual state (a crashed run stays `failed` even if a
+  sub-effect was verified; record the sub-effect in key-knobs/evidence, not in status). After editing
+  the `<id>` row in configs.md, mirror the MEMORY.md "Reference configs" line when EITHER the NEW
+  status is `working`/`superseded` (add or replace the line for `<id>` as
+  `<id> → configs.md#<anchor> (status: <status>)`) OR the OLD status was `working`/`superseded` (the
+  config was mirrored — update its existing line IN PLACE to the new status by default, e.g. a
+  `working → failed` regression rewrites `(status: working)` to `(status: failed)`; drop the line
+  entirely ONLY when a successor config's mirror line replaces it (supersede chain) or the human
+  explicitly asked for its removal). Touch MEMORY.md only in those cases (e.g. an `untested → failed`
+  transition mirrors nothing).
 For `promote-conclusion`: append ONE bullet under MEMORY.md "Validated conclusions". The text MUST
   carry an evidence pointer (job id, log path, dashboard URL); the bullet MUST end with the timestamp
   and `→ tasks/task-<id>.md`. REFUSE if the text has no evidence pointer, or if tasks/task-<id>.md
@@ -182,6 +212,8 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 - `link` when the current directory is **not inside a git worktree** (`git rev-parse --git-dir` fails) → refuse; there is no `info/exclude` to write.
 - `link` when `./research-memory` already exists → refuse; report where it points.
 - `add-job` or `update-config-status` **without an evidence pointer** → refuse; an unsupported fact does not belong in memory.
+- `add-job` with a **status outside `submitted/running/finished/failed/cancelled`** → refuse and name the invented value (e.g. `released`); the ledger vocabulary is closed (`unknown` is a resolution result, never a stored status).
+- `update-config-status <id> working` whose **cited evidence job's latest `jobs.md` row is not `finished`** → refuse, naming the actual state; a `working` verdict needs a `finished` terminal, so `failed`, `cancelled`, still-`submitted`/`running`, or absent/unresolvable all refuse (a crashed run stays `failed` even if a sub-effect was verified — record the sub-effect in key-knobs/evidence).
 - `add-blocker` **without an evidence pointer** → refuse; a blocker must cite what motivates the question.
 - `answer-blocker` with **empty answer text**, **no matching entry `#id`**, or where **all** entries for `#id` are **already filled** → refuse (the last preserves the append-only/write-once discipline). When a placeholder was re-blocked, `answer-blocker` fills the **latest** `#id` entry.
 - `update-config-status` with a status outside `untested/working/failed/superseded`, or an illegal transition → refuse and name the legal transitions.
@@ -195,12 +227,13 @@ Return ≤3 lines: "<action> done — <one-line diff hint>". Do NOT echo file bo
 
 1. `init` created all five files and stamped the project name into `MEMORY.md`.
 2. `link` created the symlink AND added it to the file from `git rev-parse --git-path info/exclude` (not `.gitignore`); verify it resolves to a writable path even in a linked worktree.
-3. `add-job` appended exactly one row at EOF; prior rows byte-identical.
-4. `update-config-status` changed only the target row and carried an evidence pointer.
+3. `add-job` appended exactly one row at EOF (prior rows byte-identical) with a status in `submitted/running/finished/failed/cancelled`; a terminal status landed as its own row for that job id (never folded into another job's row).
+4. `update-config-status` changed only the target row and carried an evidence pointer; a `working` verdict's cited job's latest `jobs.md` row is `finished` (not `failed`/`cancelled`/`submitted`/`running`/unresolvable).
 5. `add-learning` landed under the correct runbook section; other sections unchanged.
 6. `task-note` created `tasks/task-<id>.md` from the template on first use and appended without rewriting a prior Attempt.
 7. `add-blocker` appended exactly one entry at EOF with every field filled (evidence included) and an empty `Answer:`; prior entries byte-identical.
 8. `answer-blocker` filled only the **latest** `#id` entry's `Answer:` and refused only if **all** entries for `#id` were already answered.
 9. `promote-conclusion` appended exactly one bullet ending with an evidence pointer + timestamp + `→ tasks/task-<id>.md`, removed any template example bullet in that section, and updated in place (not duplicated) when a bullet for that task file already existed.
 10. `set-focus` rewrote only the "Current focus" section; every other section byte-identical.
-11. `update-config-status` landing on `working`/`superseded` mirrored the pointer in MEMORY.md "Reference configs" (added or replaced the `<id>` line) and left MEMORY.md untouched for other transitions.
+11. `update-config-status` mirrored the MEMORY.md "Reference configs" line whenever the NEW status was `working`/`superseded` (added/replaced the `<id>` line) OR the OLD status was `working`/`superseded` (updated the existing line IN PLACE to the new status by default — dropping it only when a successor's mirror line replaces it or the human asked for removal) — e.g. a `working → failed` regression leaves no stale `(status: working)` line; it left MEMORY.md untouched only when neither old nor new status was a reference (e.g. `untested → failed`).
+12. `add-job` whose `config ref` named an unregistered config auto-added an `untested` `configs.md` row for it in the same dispatch (every `config ref` resolves to a `configs.md` entry).

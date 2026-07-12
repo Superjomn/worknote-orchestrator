@@ -50,12 +50,26 @@ case "$CASE" in
     checkn "old text (1000 tok/s) replaced" grep -q '1000 tok/s' "$MEM"
     ;;
 
-  P3|P4|P5) # refusals: store byte-identical to the snapshot (no mutation).
+  P3|P4|P5|C5|J1) # refusals: store byte-identical to the snapshot (no mutation) + right reason.
     if diff -r "$ORIG" "$STORE" >/dev/null 2>&1; then
       ok "store byte-identical to snapshot (action refused, no mutation)"
     else
       bad "store changed — refusal case must not mutate any file"
       diff -r "$ORIG" "$STORE" || true
+    fi
+    REF="$SCRATCH/refusal.txt"
+    if [ -f "$REF" ]; then
+      ok "refusal.txt captured"
+      # Per-case keyword: the refusal message must name the violated rule, not just any refusal.
+      case "$CASE" in
+        P3) check "refusal names the missing evidence pointer" grep -qi 'evidence' "$REF" ;;
+        P4) check "refusal names the missing task file (task-2)" grep -q 'task-2' "$REF" ;;
+        P5) check "refusal names the empty focus text" grep -qi 'empty' "$REF" ;;
+        J1) check "refusal names the invented status (released)" grep -q 'released' "$REF" ;;
+        C5) check "refusal names the evidence job state (failed)" grep -qi 'failed' "$REF" ;;
+      esac
+    else
+      bad "refusal.txt not found — refusal case must write its verbatim message to \$S/refusal.txt"
     fi
     ;;
 
@@ -88,6 +102,28 @@ case "$CASE" in
     fi
     check "configs.md baseline-v2 row is now failed" \
       grep -Eq '^\| baseline-v2 .*\| failed \|' "$CFG"
+    ;;
+
+  C4) # working->failed regression: mirror UPDATED to failed, no stale working line.
+    n=$(count "$MEM" 'baseline-v2 → configs.md')
+    eq "exactly one baseline-v2 Reference-configs line (updated, not duplicated)" 1 "$n"
+    check "MEMORY.md mirror now (status: failed)" \
+      grep -q 'baseline-v2 → configs.md#baseline-v2 (status: failed)' "$MEM"
+    checkn "no stale (status: working) baseline-v2 line survives" \
+      grep -q 'baseline-v2 → configs.md#baseline-v2 (status: working)' "$MEM"
+    check "configs.md baseline-v2 row is now failed" \
+      grep -Eq '^\| baseline-v2 .*\| failed \|' "$CFG"
+    ;;
+
+  J2) # add-job unregistered config ref: jobs row appended + untested configs row auto-added.
+    JOB="$STORE/jobs.md"
+    check "jobs.md has the srun-800 row" grep -q 'srun-800' "$JOB"
+    check "jobs.md row uses the resolvable ref configs.md#pmt32" \
+      grep -q 'configs.md#pmt32' "$JOB"
+    n=$(grep -cE '^\| pmt32 ' "$CFG")
+    eq "exactly one pmt32 configs row (ref normalized to its anchor)" 1 "$n"
+    check "the pmt32 configs row is untested with evidence citing srun-800" \
+      grep -Eq '^\| pmt32 .*\| untested \|.*srun-800' "$CFG"
     ;;
 
   L1) # near-cap promote: ≤150 lines, new bullet present, no pointer dropped.

@@ -1,9 +1,11 @@
-# Mock-memory test cases — 0.4.0 feature coverage
+# Mock-memory test cases — 0.5.0 feature coverage
 
-A persistent, repeatable fixture for the 0.4.0 research-memory / worknote-orchestrate
-features (`promote-conclusion`, `set-focus`, Reference-configs mirroring, template
-hygiene, read-back verification, `promotion-drift`). Each case = a fixture built by
-`setup.sh`, an **LLM-executed** memory action, and a `assert.sh` post-condition.
+A persistent, repeatable fixture for the 0.4.0/0.5.0 research-memory / worknote-orchestrate
+features (`promote-conclusion`, `set-focus`, Reference-configs mirroring incl. the
+`working → failed` regression mirror, template hygiene, read-back verification,
+`promotion-drift`, jobs.md status-vocabulary enforcement, config-ref auto-registration,
+`working`-verdict evidence gating). Each case = a fixture built by `setup.sh`, an
+**LLM-executed** memory action, and a `assert.sh` post-condition.
 
 The memory "actions" are natural-language instructions the agent performs by following
 the dispatch skeleton in `skills/research-memory/SKILL.md`. Only **fixture setup** and
@@ -16,8 +18,12 @@ the dispatch skeleton in `skills/research-memory/SKILL.md`. Only **fixture setup
   0.4.0 dry-run both dispatch subagents were blocked by sandbox/Edit permissions, so all
   writes had to be main-agent-executed. Do not assume a vanilla `general-purpose` dispatch
   can mutate the fixture.
-- **Refusal cases (P3, P4, P5)** expect **no file mutation** plus a refusal message that
-  names the violated rule. `assert.sh` enforces byte-identical stores via `diff -r`.
+- **Refusal cases (P3, P4, P5, J1, C5)** expect **no file mutation** plus a refusal
+  message that names the violated rule. `assert.sh` enforces byte-identical stores via `diff -r`.
+  In each refusal case the agent MUST also write its verbatim (≤3-line) refusal message to
+  `$S/refusal.txt` (in `$SCRATCH`, **not** the store, so the byte-identical `diff -r` is
+  unaffected); `assert.sh` greps it for the per-case rule keyword so a wrong-reason refusal
+  or a crash cannot pass.
 - **D1** runs the read-only `status` invocation, not a memory action.
 - **W1** simulates a read-back failure with `chmod 444` on `MEMORY.md`; restore perms after.
 
@@ -74,6 +80,7 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 
   > research-memory `promote-conclusion`, id `1`, store `$S/research-memory`. Text:
   > "tp=8 is faster than tp=4" (no job id / log path / dashboard URL). Follow the spec.
+  > Write your verbatim (≤3-line) refusal message to `$S/refusal.txt`.
 
 - **Expected:** **REFUSE** — the text has no evidence pointer; a promoted conclusion must
   cite its evidence. No file is modified.
@@ -87,7 +94,7 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 
   > research-memory `promote-conclusion`, id `2`, store `$S/research-memory`. Text:
   > "batch=128 is optimal — job srun-777, /logs/777.txt". Note `tasks/task-2.md` does not
-  > exist. Follow the spec.
+  > exist. Follow the spec. Write your verbatim (≤3-line) refusal message to `$S/refusal.txt`.
 
 - **Expected:** **REFUSE** — `tasks/task-2.md` is missing; a conclusion must trace back to
   a real task file. No file is modified.
@@ -100,6 +107,7 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 - **Action:**
 
   > research-memory `set-focus`, store `$S/research-memory`. Text: (empty). Follow the spec.
+  > Write your verbatim (≤3-line) refusal message to `$S/refusal.txt`.
 
 - **Expected:** **REFUSE** — empty focus text. No file is modified.
 - **Assert:** `bash tests/mock-memory/assert.sh P5 "$S"`
@@ -155,8 +163,30 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 - **Expected:** done — configs row `failed`; MEMORY.md byte-identical to the fixture.
 - **Assert:** `bash tests/mock-memory/assert.sh C3 "$S"`
 
-  > Note: C3 asserts the **current** spec (MEMORY.md untouched on `→ failed`). If a later
-  > review round changes that behavior, update this case.
+  > Note: an `untested → failed` transition mirrors nothing because the config was never a
+  > reference (nothing was mirrored into MEMORY.md to update), so MEMORY.md stays
+  > byte-identical. This is distinct from C4's `working → failed`, where the OLD status
+  > *was* a reference and the mirror line MUST be updated. The 0.5.0 mirror rule keys on
+  > **old OR new** status ∈ `working`/`superseded`; `untested → failed` matches neither.
+
+## C4 — update-config-status working → failed (mirror UPDATED on regression)
+
+- **Fixture:** `config-working` (same builder as C2) — `configs.md` `baseline-v2` at
+  `working`; MEMORY.md already mirrors it as `(status: working)`.
+- **Setup:** `bash tests/mock-memory/setup.sh C4 "$S"`
+- **Action:**
+
+  > research-memory `update-config-status`, id `baseline-v2`, status `failed`, store
+  > `$S/research-memory`. Evidence: "regression — job srun-700 OOM, /logs/700.txt,
+  > 2026-07-10". Flip the `baseline-v2` row in `configs.md` to `failed`. The OLD status was
+  > `working`, so baseline-v2 IS mirrored in MEMORY.md "Reference configs" — update that
+  > line in place to `(status: failed)` (update-in-place is the spec default; dropping the
+  > line is reserved for a supersede chain or an explicit human removal request) so no stale
+  > `(status: working)` line survives the regression. Do NOT leave a second baseline-v2 line.
+
+- **Expected:** done — configs row `failed`; exactly ONE `baseline-v2` Reference-configs
+  line, now `(status: failed)`; no stale `(status: working)` line.
+- **Assert:** `bash tests/mock-memory/assert.sh C4 "$S"`
 
 ## L1 — promote under the 150-line cap (curation)
 
@@ -210,6 +240,55 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 - **Expected:** `tasks/task-1.md` Outcome has a single `promoted: FAILED ...` line.
 - **Assert:** `bash tests/mock-memory/assert.sh W1 "$S"`
 
+## C5 — update-config-status → working refusal (evidence job failed)
+
+- **Fixture:** `config-evidence-failed` — `configs.md` `baseline-v2` at `untested`;
+  `jobs.md` has a `failed` row for job `srun-500` (the run that would be cited as evidence).
+- **Setup:** `bash tests/mock-memory/setup.sh C5 "$S"`
+- **Action:**
+
+  > research-memory `update-config-status`, id `baseline-v2`, status `working`, store
+  > `$S/research-memory`. Evidence: "job srun-500 — reuse path engaged". Note: `jobs.md`
+  > records `srun-500` as `failed`. Follow the spec. Write your verbatim (≤3-line) refusal
+  > message to `$S/refusal.txt`.
+
+- **Expected:** **REFUSE** — a `working` verdict requires the cited evidence job's latest
+  `jobs.md` row to be `finished`, but the cited `srun-500`'s latest row is `failed`; a
+  verified sub-effect (reuse engaged) belongs in key-knobs/evidence, not the status. No
+  file is modified.
+- **Assert:** `bash tests/mock-memory/assert.sh C5 "$S"`
+
+## J1 — add-job refusal: out-of-vocabulary status
+
+- **Fixture:** `fresh`.
+- **Setup:** `bash tests/mock-memory/setup.sh J1 "$S"`
+- **Action:**
+
+  > research-memory `add-job`, store `$S/research-memory`. Row: timestamp now, job id
+  > `srun-810`, purpose "sweep dp=8", config ref `configs.md#baseline-v2`, owner `tab:mock`,
+  > status `released`, result ptr `—`. Follow the spec. Write your verbatim (≤3-line) refusal
+  > message to `$S/refusal.txt`.
+
+- **Expected:** **REFUSE** — `released` is outside the closed jobs.md vocabulary
+  (`submitted/running/finished/failed/cancelled`); name the invented value. No file is modified.
+- **Assert:** `bash tests/mock-memory/assert.sh J1 "$S"`
+
+## J2 — add-job with unregistered config ref → auto-add untested configs row
+
+- **Fixture:** `fresh` (pristine `configs.md`, no real config rows).
+- **Setup:** `bash tests/mock-memory/setup.sh J2 "$S"`
+- **Action:**
+
+  > research-memory `add-job`, store `$S/research-memory`. Row: timestamp now, job id
+  > `srun-800`, purpose "reuse test pmt=32", config ref `configs.md#pmt32`, owner `tab:mock`,
+  > status `submitted`, result ptr `—`. `pmt32` has NO row in `configs.md`; per the spec, add
+  > an `untested` configs.md row for `pmt32` in this SAME dispatch, normalizing the ref to its
+  > anchor (id `pmt32`) with evidence citing this job (`srun-800`).
+
+- **Expected:** done — `jobs.md` has the `srun-800` row referencing `configs.md#pmt32`;
+  `configs.md` gained exactly one `pmt32` row at `untested`, its evidence citing `srun-800`.
+- **Assert:** `bash tests/mock-memory/assert.sh J2 "$S"`
+
 ---
 
 ## Coverage map
@@ -224,6 +303,10 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 | C1 | `untested→working` mirror + configs/Reference template hygiene |
 | C2 | `working→superseded` mirror REPLACE (not duplicate) |
 | C3 | `untested→failed` — no mirror, MEMORY.md untouched |
+| C4 | `working→failed` regression — mirror UPDATED (no stale `working` line) |
+| C5 | `→working` refusal — cited evidence job is `failed` in jobs.md |
+| J1 | `add-job` refusal — out-of-vocabulary status (`released`) |
+| J2 | `add-job` unregistered config ref → auto-add `untested` configs row |
 | L1 | ≤150-line curation on promote (pointers preserved) |
 | D1 | `promotion-drift` detection by `status` (read-only) |
 | W1 | read-back failure → `promoted: FAILED` (Outcome write-once) |
