@@ -1,10 +1,11 @@
-# Mock-memory test cases — 0.5.0 feature coverage
+# Mock-memory test cases — 0.5.0 / 0.7.0 feature coverage
 
-A persistent, repeatable fixture for the 0.4.0/0.5.0 research-memory / worknote-orchestrate
+A persistent, repeatable fixture for the 0.4.0/0.5.0/0.7.0 research-memory / worknote-orchestrate
 features (`promote-conclusion`, `set-focus`, Reference-configs mirroring incl. the
 `working → failed` regression mirror, template hygiene, read-back verification,
 `promotion-drift`, jobs.md status-vocabulary enforcement, config-ref auto-registration,
-`working`-verdict evidence gating). Each case = a fixture built by `setup.sh`, an
+`working`-verdict evidence gating, and the read-only `query` action — memory QA +
+cross-worknote reference). Each case = a fixture built by `setup.sh`, an
 **LLM-executed** memory action, and a `assert.sh` post-condition.
 
 The memory "actions" are natural-language instructions the agent performs by following
@@ -18,7 +19,7 @@ the dispatch skeleton in `skills/research-memory/SKILL.md`. Only **fixture setup
   0.4.0 dry-run both dispatch subagents were blocked by sandbox/Edit permissions, so all
   writes had to be main-agent-executed. Do not assume a vanilla `general-purpose` dispatch
   can mutate the fixture.
-- **Refusal cases (P3, P4, P5, J1, C5)** expect **no file mutation** plus a refusal
+- **Refusal cases (P3, P4, P5, J1, C5, S2)** expect **no file mutation** plus a refusal
   message that names the violated rule. `assert.sh` enforces byte-identical stores via `diff -r`.
   In each refusal case the agent MUST also write its verbatim (≤3-line) refusal message to
   `$S/refusal.txt` (in `$SCRATCH`, **not** the store, so the byte-identical `diff -r` is
@@ -26,6 +27,12 @@ the dispatch skeleton in `skills/research-memory/SKILL.md`. Only **fixture setup
   or a crash cannot pass.
 - **D1** runs the read-only `status` invocation, not a memory action.
 - **W1** simulates a read-back failure with `chmod 444` on `MEMORY.md`; restore perms after.
+- **Query cases (Q1–Q5)** run the **read-only** `query` action. The agent follows the
+  "Query dispatch skeleton" in `skills/research-memory/SKILL.md`, then writes the returned
+  answer **verbatim** to `$S/answer.txt` (mirrors the `refusal.txt` pattern; lives in `$SCRATCH`,
+  **not** the store, so the byte-identical `diff -r` is unaffected) and **touches nothing** in the
+  store. `assert.sh` enforces byte-identical stores and greps `answer.txt` for the expected fact,
+  evidence pointer, or explicit NOT FOUND. Q3 also asserts the **foreign** store is byte-identical.
 
 ## Scratch directory
 
@@ -131,6 +138,10 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 - **Expected:** done — configs row `working`; MEMORY.md mirror added; both template
   examples gone.
 - **Assert:** `bash tests/mock-memory/assert.sh C1 "$S"`
+
+  > Note (best-per-family, E4): `baseline-v2` is the only config in its family here, so it is
+  > trivially the current family-best — the mirror IS correct. C6 covers the contrasting case where
+  > a same-family `working` transition is NOT the family-best and therefore mirrors nothing.
 
 ## C2 — update-config-status working → superseded (mirror REPLACE)
 
@@ -289,6 +300,176 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
   `configs.md` gained exactly one `pmt32` row at `untested`, its evidence citing `srun-800`.
 - **Assert:** `bash tests/mock-memory/assert.sh J2 "$S"`
 
+## S1 — set-focus prune: bloated DONE changelog → ≤5 forward-looking bullets
+
+- **Fixture:** `focus-bloated` — MEMORY.md "Current focus" drifted into a 6-bullet
+  `DONE 2026-07-14: filled placeholder #N …` changelog.
+- **Setup:** `bash tests/mock-memory/setup.sh S1 "$S"`
+- **Action** (research-memory `set-focus`):
+
+  > research-memory `set-focus`, store `$S/research-memory`. Rewrite "Current focus" IN PLACE as a
+  > FORWARD-LOOKING list (in-progress + immediate next steps), ≤5 bullets, NOT a changelog. New
+  > bullets: "profiling tp=16 variant (#17)" and "next: draft the throughput comparison table". Per
+  > the spec, DROP the finished `DONE #N` bullets — completed placeholders live in Validated
+  > conclusions / jobs.md / task Outcomes, not here. Touch no other section.
+
+- **Expected:** done — Current focus is ≤5 bullets, forward-looking, with no `DONE #N` entries;
+  other sections unchanged.
+- **Assert:** `bash tests/mock-memory/assert.sh S1 "$S"`
+
+## S2 — set-focus refusal: pure DONE-changelog bullet
+
+- **Fixture:** `fresh`.
+- **Setup:** `bash tests/mock-memory/setup.sh S2 "$S"`
+- **Action:**
+
+  > research-memory `set-focus`, store `$S/research-memory`. Text: append a per-placeholder bullet
+  > "DONE 2026-07-14: filled placeholder #16 — final report assembled" to Current focus. Follow the
+  > spec. Write your verbatim (≤3-line) refusal message to `$S/refusal.txt`.
+
+- **Expected:** **REFUSE** — Current focus is forward-looking, not a completion log; a pure `DONE #N`
+  changelog bullet does not belong there (record completion in Validated conclusions / jobs.md /
+  task Outcome). No file is modified.
+- **Assert:** `bash tests/mock-memory/assert.sh S2 "$S"`
+
+## J3 — add-job: released/scancelled pool reservation → `cancelled`
+
+- **Fixture:** `pool-running` — `jobs.md` has `srun-900` as a `running` pool reservation holder.
+- **Setup:** `bash tests/mock-memory/setup.sh J3 "$S"`
+- **Action:**
+
+  > research-memory `add-job`, store `$S/research-memory`. The `srun-900` pool reservation was
+  > scancelled/released. Append its terminal row: timestamp now, job id `srun-900`, purpose "pool
+  > reservation (8 nodes)", config ref `configs.md#baseline-v2`, owner `tab:mock`. Per the spec, a
+  > released/scancelled pool maps to status **`cancelled`** (NOT `released`) with the release reason
+  > in the result ptr (e.g. "scancelled — sweep done").
+
+- **Expected:** done — `jobs.md` gains a `srun-900` row at `cancelled` (release reason in result
+  ptr); no `released` status anywhere.
+- **Assert:** `bash tests/mock-memory/assert.sh J3 "$S"`
+
+## K1 — add-script: relocate a root helper under `scripts/` + cite it
+
+- **Fixture:** `stray-script` — a reusable helper `collect_tps.py` was created ad hoc at the memory
+  ROOT, referenced nowhere (the F3 drift).
+- **Setup:** `bash tests/mock-memory/setup.sh K1 "$S"`
+- **Action** (research-memory `add-script`):
+
+  > research-memory `add-script`, name `collect_tps.py`, description "extract tok/s from a run log",
+  > store `$S/research-memory`. The helper currently sits at the memory root. Per the spec, MOVE it
+  > to `scripts/collect_tps.py` AND add its `runbook.md` §Collect citation in the SAME dispatch. The
+  > root copy must not survive; the script must not be left uncited.
+
+- **Expected:** done — `scripts/collect_tps.py` exists, no `collect_tps.py` at the root, and
+  `runbook.md` §Collect cites it.
+- **Assert:** `bash tests/mock-memory/assert.sh K1 "$S"`
+
+## C6 — non-family-best `working` transition → configs.md only (no Reference line)
+
+- **Fixture:** `config-family-best` — `configs.md` has `family-a-best` @ `working` (mirrored in
+  MEMORY.md "Reference configs") and `family-a-alt` @ `untested`; `jobs.md` has a `finished`
+  `srun-610` for the alt (1180 tok/s, slower than the best).
+- **Setup:** `bash tests/mock-memory/setup.sh C6 "$S"`
+- **Action:**
+
+  > research-memory `update-config-status`, id `family-a-alt`, status `working`, store
+  > `$S/research-memory`. Evidence: "job srun-610 finished, 1180 tok/s, /logs/610.txt". Flip the
+  > `family-a-alt` row in `configs.md` to `working`. Note `family-a-alt` is NOT the family best
+  > (family-a-best already runs faster). Per the spec, "Reference configs" is a curated best-per-
+  > family shortlist, so a non-best `working` transition updates `configs.md` ONLY — do NOT add a
+  > `family-a-alt` Reference line; leave MEMORY.md untouched.
+
+- **Expected:** done — `configs.md` `family-a-alt` row is `working`; MEMORY.md byte-identical (no
+  new Reference line — the shortlist keeps only the family-best).
+- **Assert:** `bash tests/mock-memory/assert.sh C6 "$S"`
+
+## Q1 — query: how to reproduce the last job
+
+- **Fixture:** `query-repro` — `runbook.md` §Submit has `sbatch --nodes=2 run.sh <config>`;
+  `configs.md` has a `pmt-repro` row (key knobs); `jobs.md` has two rows whose **last** (most
+  recent) is `srun-950` / `configs.md#pmt-repro` (the earlier is `srun-900` / baseline).
+- **Setup:** `bash tests/mock-memory/setup.sh Q1 "$S"`
+- **Action** (research-memory `query`, read-only):
+
+  > research-memory `query`, store `$S/research-memory`. Question: "how do I reproduce the last
+  > job?" Follow the Query dispatch skeleton: search order `MEMORY.md` → `jobs.md` (the LAST row is
+  > the most recent job) → its `config ref` row in `configs.md` (key knobs) → `runbook.md` §Submit
+  > (the launch command); assemble a reproduction recipe naming THAT job id, its config, and the
+  > submit command, each with an evidence pointer. Do NOT modify any file. Write the returned answer
+  > verbatim to `$S/answer.txt`.
+
+- **Expected:** answer names `srun-950` + the submit command `sbatch --nodes=2 run.sh`; it does
+  NOT cite `srun-900` as the reproduction target. Store byte-identical.
+- **Assert:** `bash tests/mock-memory/assert.sh Q1 "$S"`
+
+## Q2 — query: list all the nsys reports
+
+- **Fixture:** `query-nsys` — `jobs.md` result ptrs include two `.nsys-rep` paths
+  (`/logs/prof-a.nsys-rep`, `/logs/prof-b.nsys-rep`) plus one non-nsys ptr (`/logs/plain.txt`);
+  `tasks/task-1.md` mentions a third nsys path (`/logs/prof-c.nsys-rep`).
+- **Setup:** `bash tests/mock-memory/setup.sh Q2 "$S"`
+- **Action:**
+
+  > research-memory `query`, store `$S/research-memory`. Question: "list all the nsys reports."
+  > Per the skeleton recipe, scan `jobs.md` result pointers + `tasks/task-*.md` Attempts +
+  > `runbook.md` §Collect for `nsys` / `.nsys-rep` paths; list every distinct path with the file
+  > it came from. Do NOT list non-nsys pointers. Read-only. Write the answer verbatim to
+  > `$S/answer.txt`.
+
+- **Expected:** answer lists all three `.nsys-rep` paths (incl. the one from the task file), never
+  `/logs/plain.txt`. Store byte-identical.
+- **Assert:** `bash tests/mock-memory/assert.sh Q2 "$S"`
+
+## Q3 — query: cross-worknote foreign reference (deduced memory)
+
+- **Fixture:** `query-foreign` — a sibling worknote `$S/Prod.md` plus its **deduced**
+  `$S/Prod.memory/` store, whose `MEMORY.md` "Validated conclusions" holds the answer
+  (`PROD-BATCH-512`). The fact lives ONLY in `Prod.memory` (NOT in `Prod.md`), so a correct query
+  must search the deduced memory dir first. The local `$S/research-memory` store is fresh.
+- **Setup:** `bash tests/mock-memory/setup.sh Q3 "$S"`
+- **Action:**
+
+  > research-memory `query "$S/Prod.md" "what production batch size is validated?"`. This is a
+  > FOREIGN reference: deduce the memory dir as `$S/Prod.memory/` (same directory, `<Base>.memory/`)
+  > and search it FIRST. Answer with the fact + an evidence pointer into `Prod.memory/`. Do NOT
+  > write into the foreign store or the local store. Write the answer verbatim to `$S/answer.txt`.
+
+- **Expected:** answer carries `PROD-BATCH-512` + an evidence pointer into `Prod.memory/`. Both the
+  local store AND the foreign `Prod.memory` are byte-identical.
+- **Assert:** `bash tests/mock-memory/assert.sh Q3 "$S"`
+
+## Q4 — query: worknote-markdown fallback (no deduced memory)
+
+- **Fixture:** `query-fallback` — a sibling worknote `$S/Notes.md` whose fact
+  (`NOTES-ONLY-XYZ`, under `## Deploy`) lives ONLY in the markdown; there is **no** `Notes.memory/`
+  beside it, so a query must fall back to a bounded grep of `Notes.md`.
+- **Setup:** `bash tests/mock-memory/setup.sh Q4 "$S"`
+- **Action:**
+
+  > research-memory `query "$S/Notes.md" "what is the deploy endpoint token?"`. Deduce
+  > `$S/Notes.memory/` — it does NOT exist, so fall back to a bounded grep of `Notes.md` itself.
+  > Answer with the fact + a pointer to `Notes.md` (cite the §section or line). Read-only. Write the
+  > answer verbatim to `$S/answer.txt`.
+
+- **Expected:** answer carries `NOTES-ONLY-XYZ` + a pointer to `Notes.md`. Local store
+  byte-identical.
+- **Assert:** `bash tests/mock-memory/assert.sh Q4 "$S"`
+
+## Q5 — query miss: explicit NOT FOUND (no invention)
+
+- **Fixture:** `query-miss` — a pristine store with nothing about `tp=64`.
+- **Setup:** `bash tests/mock-memory/setup.sh Q5 "$S"`
+- **Action:**
+
+  > research-memory `query`, store `$S/research-memory`. Question: "how many tok/s did the tp=64
+  > sweep reach?" Search per the skeleton. The store has no such record — per the spec return the
+  > explicit `NOT FOUND in <what was searched>` line; NEVER guess or invent a throughput number.
+  > Read-only. Write the answer verbatim to `$S/answer.txt`.
+
+- **Expected:** answer is an explicit NOT FOUND / no-record miss; it invents no `tok/s` value.
+  Store byte-identical.
+- **Assert:** `bash tests/mock-memory/assert.sh Q5 "$S"`
+
 ---
 
 ## Coverage map
@@ -305,8 +486,18 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 | C3 | `untested→failed` — no mirror, MEMORY.md untouched |
 | C4 | `working→failed` regression — mirror UPDATED (no stale `working` line) |
 | C5 | `→working` refusal — cited evidence job is `failed` in jobs.md |
+| C6 | non-family-best `working` → configs.md only, no Reference line (best-per-family shortlist) |
 | J1 | `add-job` refusal — out-of-vocabulary status (`released`) |
 | J2 | `add-job` unregistered config ref → auto-add `untested` configs row |
+| J3 | `add-job` released/scancelled pool reservation → `cancelled` (positive mapping) |
+| K1 | `add-script` — relocate root helper under `scripts/` + cite in runbook §Collect |
+| S1 | `set-focus` prune — bloated DONE changelog → ≤5 forward-looking bullets |
+| S2 | `set-focus` refusal — pure DONE-changelog bullet |
 | L1 | ≤150-line curation on promote (pointers preserved) |
 | D1 | `promotion-drift` detection by `status` (read-only) |
 | W1 | read-back failure → `promoted: FAILED` (Outcome write-once) |
+| Q1 | `query` — reproduce the last job (jobs.md EOF → configs key knobs → runbook §Submit) |
+| Q2 | `query` — list all nsys reports (jobs.md ptrs + task Attempts; excludes non-nsys) |
+| Q3 | `query <worknote>` — foreign reference via deduced `<Base>.memory/` (read-only) |
+| Q4 | `query <worknote>` — worknote-markdown fallback when no `.memory/` exists |
+| Q5 | `query` miss — explicit NOT FOUND, no invented specifics |

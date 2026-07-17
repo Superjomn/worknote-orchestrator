@@ -50,7 +50,7 @@ case "$CASE" in
     checkn "old text (1000 tok/s) replaced" grep -q '1000 tok/s' "$MEM"
     ;;
 
-  P3|P4|P5|C5|J1) # refusals: store byte-identical to the snapshot (no mutation) + right reason.
+  P3|P4|P5|C5|J1|S2) # refusals: store byte-identical to the snapshot (no mutation) + right reason.
     if diff -r "$ORIG" "$STORE" >/dev/null 2>&1; then
       ok "store byte-identical to snapshot (action refused, no mutation)"
     else
@@ -67,6 +67,8 @@ case "$CASE" in
         P5) check "refusal names the empty focus text" grep -qi 'empty' "$REF" ;;
         J1) check "refusal names the invented status (released)" grep -q 'released' "$REF" ;;
         C5) check "refusal names the evidence job state (failed)" grep -qi 'failed' "$REF" ;;
+        S2) check "refusal names the DONE/changelog/forward-looking rule" \
+              grep -qiE 'changelog|forward-looking|completion log|DONE' "$REF" ;;
       esac
     else
       bad "refusal.txt not found — refusal case must write its verbatim message to \$S/refusal.txt"
@@ -126,6 +128,64 @@ case "$CASE" in
       grep -Eq '^\| pmt32 .*\| untested \|.*srun-800' "$CFG"
     ;;
 
+  S1) # set-focus prune: Current focus rewritten to ≤5 forward-looking bullets, no DONE changelog.
+    # Extract the "## Current focus" section (lines up to the next "## " heading).
+    focus=$(awk '/^## Current focus/{f=1;next} /^## /{f=0} f' "$MEM")
+    nb=$(printf '%s\n' "$focus" | grep -cE '^- ' || true)
+    le "Current focus has ≤5 bullets" 5 "$nb"
+    if [ "$nb" -ge 1 ]; then ok "Current focus is non-empty (not a vacuous wipe)"; else bad "Current focus is empty — expected the forward-looking bullets"; fi
+    check "the new forward-looking bullet (tp=16 variant) landed" \
+      grep -qF 'tp=16 variant' "$MEM"
+    if printf '%s\n' "$focus" | grep -qE 'DONE #?[0-9]'; then
+      bad "Current focus still carries DONE #N changelog bullets"
+    else
+      ok "no DONE #N changelog bullets in Current focus"
+    fi
+    check "other sections intact (Validated conclusions heading present)" \
+      grep -q '^## Validated conclusions' "$MEM"
+    ;;
+
+  C6) # non-best working transition: configs row working, but NO new Reference line (MEMORY untouched).
+    if diff "$ORIG/MEMORY.md" "$MEM" >/dev/null 2>&1; then
+      ok "MEMORY.md byte-identical (non-family-best working → no Reference line)"
+    else
+      bad "MEMORY.md changed — a non-best working transition must not add a Reference line"
+      diff "$ORIG/MEMORY.md" "$MEM" || true
+    fi
+    check "configs.md family-a-alt row is now working" \
+      grep -Eq '^\| family-a-alt .*\| working \|' "$CFG"
+    checkn "no family-a-alt Reference-configs line added" \
+      grep -q 'family-a-alt → configs.md' "$MEM"
+    ;;
+
+  J3) # pool release: appended a cancelled row for srun-900; never the invalid 'released' status.
+    JOB="$STORE/jobs.md"
+    check "jobs.md srun-900 has a cancelled row" \
+      grep -Eq '^\| .*srun-900 .*\| cancelled \|' "$JOB"
+    checkn "no 'released' status column anywhere in jobs.md" \
+      grep -Eq '\| released \|' "$JOB"
+    # The release reason must live in the result ptr (col 8), not be empty/dash.
+    reason=$(awk -F'|' '/srun-900/ && $7 ~ /cancelled/ {gsub(/^[[:space:]]+|[[:space:]]+$/,"",$8); r=$8} END{print r}' "$JOB")
+    if [ -n "$reason" ] && [ "$reason" != "—" ] && [ "$reason" != "-" ]; then
+      ok "cancelled row records a release reason in the result ptr ($reason)"
+    else
+      bad "cancelled srun-900 row has no release reason in the result ptr"
+    fi
+    ;;
+
+  K1) # add-script: helper relocated under scripts/, root copy gone, cited in runbook §Collect.
+    RB="$STORE/runbook.md"
+    check "scripts/collect_tps.py exists" test -f "$STORE/scripts/collect_tps.py"
+    checkn "no stray collect_tps.py at the memory root" test -f "$STORE/collect_tps.py"
+    # The Collect section (up to the next "## " heading) must cite the script.
+    collect=$(awk '/^## Collect/{f=1;next} /^## /{f=0} f' "$RB")
+    if printf '%s\n' "$collect" | grep -q 'collect_tps.py'; then
+      ok "runbook §Collect cites collect_tps.py"
+    else
+      bad "runbook §Collect does not cite collect_tps.py"
+    fi
+    ;;
+
   L1) # near-cap promote: ≤150 lines, new bullet present, no pointer dropped.
     lines=$(wc -l < "$MEM")
     le "MEMORY.md ≤150 lines" 150 "$lines"
@@ -162,6 +222,58 @@ case "$CASE" in
     np=$(grep -c 'promoted:' "$T" 2>/dev/null || true)
     eq "exactly one promoted: line (Outcome write-once)" 1 "$np"
     check "promoted: FAILED recorded (drift stays visible)" grep -q 'promoted: FAILED' "$T"
+    ;;
+
+  Q1|Q2|Q3|Q4|Q5) # query cases: READ-ONLY — store byte-identical + answer.txt written + right answer.
+    ANS="$SCRATCH/answer.txt"
+    if diff -r "$ORIG" "$STORE" >/dev/null 2>&1; then
+      ok "store byte-identical to snapshot (query is read-only)"
+    else
+      bad "store changed — a query must not mutate any file"
+      diff -r "$ORIG" "$STORE" || true
+    fi
+    if [ -f "$ANS" ]; then
+      ok "answer.txt captured"
+    else
+      bad "answer.txt not found — query case must write the returned answer to \$S/answer.txt"
+    fi
+    case "$CASE" in
+      Q1) # reproduce the last job: names srun-950 + the submit command, NOT the older srun-900.
+        check "answer names the last job id (srun-950)" grep -qF 'srun-950' "$ANS"
+        check "answer carries the submit command fragment" \
+          grep -qF 'sbatch --nodes=2 run.sh' "$ANS"
+        checkn "answer does NOT cite the earlier job (srun-900) as the reproduction target" \
+          grep -qF 'srun-900' "$ANS"
+        ;;
+      Q2) # list all nsys reports: all three .nsys-rep paths, never the non-nsys ptr.
+        check "answer lists /logs/prof-a.nsys-rep (jobs.md)" grep -qF '/logs/prof-a.nsys-rep' "$ANS"
+        check "answer lists /logs/prof-b.nsys-rep (jobs.md)" grep -qF '/logs/prof-b.nsys-rep' "$ANS"
+        check "answer lists /logs/prof-c.nsys-rep (task file)" grep -qF '/logs/prof-c.nsys-rep' "$ANS"
+        checkn "answer does NOT list the non-nsys ptr (/logs/plain.txt)" \
+          grep -qF '/logs/plain.txt' "$ANS"
+        ;;
+      Q3) # foreign reference: fact from Prod.memory + a pointer into it; foreign store untouched.
+        check "answer carries the foreign fact (PROD-BATCH-512)" grep -qF 'PROD-BATCH-512' "$ANS"
+        check "answer cites an evidence pointer into Prod.memory/" grep -qF 'Prod.memory' "$ANS"
+        if diff -r "$SCRATCH/Prod.memory.orig" "$SCRATCH/Prod.memory" >/dev/null 2>&1; then
+          ok "foreign store (Prod.memory) byte-identical (query is read-only)"
+        else
+          bad "foreign store changed — a query must not mutate a foreign store"
+          diff -r "$SCRATCH/Prod.memory.orig" "$SCRATCH/Prod.memory" || true
+        fi
+        ;;
+      Q4) # worknote-markdown fallback: fact + a pointer to Notes.md (no Notes.memory/ existed).
+        check "answer carries the markdown-only fact (NOTES-ONLY-XYZ)" grep -qF 'NOTES-ONLY-XYZ' "$ANS"
+        check "answer cites a pointer to Notes.md (worknote-markdown fallback)" \
+          grep -qF 'Notes.md' "$ANS"
+        ;;
+      Q5) # miss: explicit NOT FOUND, no invented specifics.
+        check "answer is an explicit NOT FOUND / no-record miss" \
+          grep -qiE 'not found|no (evidence|record|entry)' "$ANS"
+        checkn "answer invents no throughput number (no fabricated tok/s value)" \
+          grep -Eq '[0-9]+ tok/s' "$ANS"
+        ;;
+    esac
     ;;
 
   *) echo "FATAL: unknown case-id '$CASE'" >&2; exit 2 ;;

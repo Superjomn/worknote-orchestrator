@@ -5,14 +5,14 @@
 <!-- Every fact must carry a timestamp and an evidence pointer (job id, log path, dashboard URL). -->
 
 ## Current focus
-_(what the project is actively working on right now — 1–5 bullets)_
+_(≤5 forward-looking bullets (in-progress + next); not a changelog)_
 
 ## Validated conclusions
 _(facts confirmed by evidence; each bullet ends with a pointer + timestamp)_
 - _(e.g. "baseline config X reaches 1200 tok/s — job srun-8812345, wandb/run/abc, 2026-07-09 → tasks/task-3.md")_
 
 ## Reference configs
-_(pointers to the current best / working configs; details live in configs.md)_
+_(curated best/representative config per family/purpose — NOT every working row; full set lives in configs.md)_
 - _(e.g. "working baseline → configs.md#baseline-v2 (status: working)")_
 
 ## Pointers
