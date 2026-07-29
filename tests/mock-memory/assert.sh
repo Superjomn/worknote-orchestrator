@@ -224,6 +224,54 @@ case "$CASE" in
     check "promoted: FAILED recorded (drift stays visible)" grep -q 'promoted: FAILED' "$T"
     ;;
 
+  X1) # context hiding: the #2 dispatch prompt carries the global + S2 chain, never S1's.
+    WN="$SCRATCH/Scratch.md"
+    D="$SCRATCH/dispatch-2.txt"
+    if [ -f "$D" ]; then
+      ok "dispatch-2.txt captured"
+      check "dispatch carries the global context block"   grep -q 'GLOBAL-CTX-AAA' "$D"
+      check "dispatch carries its own section's context"  grep -q 'SEC2-CTX-CCC' "$D"
+      checkn "dispatch HIDES the sibling section's context" grep -q 'SEC1-CTX-BBB' "$D"
+    else
+      bad "dispatch-2.txt not found — build the #2 dispatch prompt and save it to \$S/dispatch-2.txt"
+    fi
+    if diff -q "$SCRATCH/Scratch.md.orig" "$WN" >/dev/null 2>&1; then
+      ok "worknote byte-identical (prompt-building performs no writes)"
+    else
+      bad "worknote changed — building a dispatch prompt must not write"
+    fi
+    ;;
+
+  X2) # id-stamping skips context blocks: only the two real placeholders get ids.
+    WN="$SCRATCH/Scratch.md"
+    checkn "no context block was stamped (no <<!# anywhere)" grep -q '<<!#' "$WN"
+    check "global context block intact and un-stamped" grep -q '<<! GLOBAL-CTX-AAA' "$WN"
+    check "section context block intact and un-stamped" grep -q '<<! SEC1-CTX-BBB' "$WN"
+    check "first real placeholder stamped #1" grep -q '<<#1 measure baseline throughput>>' "$WN"
+    check "second real placeholder stamped #2" grep -q '<<#2 profile the decode phase>>' "$WN"
+    nb=$(grep -c '<<!' "$WN" 2>/dev/null || true)
+    eq "still exactly 2 context blocks" 2 "$nb"
+    ;;
+
+  X3) # context-drift detection: status output has a context-drift row for id 1.
+    OUT="$SCRATCH/status-output.txt"
+    if [ -f "$OUT" ]; then
+      if grep -E 'context-drift' "$OUT" | grep -q '1'; then
+        ok "status output reports context-drift for id 1"
+      else
+        bad "status output has no context-drift row for id 1"
+      fi
+    else
+      bad "status-output.txt not found — run the /worknote-orchestrate status step and save its table there"
+    fi
+    if diff -r "$ORIG" "$STORE" >/dev/null 2>&1; then
+      ok "store byte-identical to snapshot (status is read-only)"
+    else
+      bad "store changed — a status scan must not mutate any file"
+      diff -r "$ORIG" "$STORE" || true
+    fi
+    ;;
+
   Q1|Q2|Q3|Q4|Q5) # query cases: READ-ONLY — store byte-identical + answer.txt written + right answer.
     ANS="$SCRATCH/answer.txt"
     if diff -r "$ORIG" "$STORE" >/dev/null 2>&1; then

@@ -1,8 +1,8 @@
 ---
 name: worknote-orchestrate
-description: "Fill <<...>> placeholders in a human worknote by classifying each as fill-from-data or needs-work, then running the needs-work ones as jobs across parallel coordinator-driven agents (Mode A) or a human-driven tab (Mode B), with a claiming protocol, worknote-embedded state markers, and ONE batched human-feedback round. Layers on complete-report and records everything via research-memory. TRIGGER when: user runs /worknote-orchestrate, says \"fill worknote placeholders\", \"run worknote jobs\", \"orchestrate the worknote\", or wants to execute + fill placeholders that require running jobs."
+description: "Fill <<...>> placeholders in a human worknote by classifying each as fill-from-data or needs-work, then running the needs-work ones as jobs across parallel coordinator-driven agents (Mode A) or a human-driven tab (Mode B), with a claiming protocol, worknote-embedded state markers, scoped <<! ... >> context blocks, and ONE batched human-feedback round. Layers on complete-report and records everything via research-memory. TRIGGER when: user runs /worknote-orchestrate, says \"fill worknote placeholders\", \"run worknote jobs\", \"orchestrate the worknote\", \"scope worknote context\", \"add persistent context to a section\", or wants to execute + fill placeholders that require running jobs."
 author: Chunwei Yan
-version: 0.7.0
+version: 0.8.0
 user_invocable: true
 ---
 
@@ -21,12 +21,14 @@ This skill **reuses** `complete-report`'s mechanics and **extends** them with ex
   - Regex: `<<[^<>]+?>>` — `<<`, then one or more non-`<`/`>` chars (non-greedy), then `>>`.
   - Apply with multiline/DOTALL semantics (`Grep multiline: true`; Python `re.DOTALL`; ripgrep `-U --multiline-dotall`) so a placeholder body may span newlines.
   - Non-greedy `+?` pairs each `<<` with its *closest* `>>`; the `[^<>]` class forbids nested `<`/`>`.
+  - **Scan, then partition.** One regex finds every match; a match whose body starts with `!` is a **context block** (`<<! ... >>`, see below) and is **excluded from the fill loop** — everything else is a placeholder or state marker. Partitioning *after* matching (no lookahead) keeps the rule identical in the `Grep` tool's engine and in `wn_scan.py`.
   - Core replace step: read a narrow window (`start_line-20` .. `end_line+20`), `Edit` with `old_string` = the **full multi-line placeholder** exactly as written, work top-to-bottom to avoid line drift, then re-scan.
 - **Soft dependency**: for the richer **content-structure rules** (tables over prose, bold-term bullets, brevity), and the **figure/math gating** rules, cite and defer to `complete-report`. If it is installed, follow its Content Structure / Figures / Math sections verbatim for generated content. This skill does not duplicate that ruleset.
 
 ## Output discipline
 
 - **Only conclusions go into the worknote.** Command lines, intermediate numbers, evidence, and job details go to shared memory (`jobs.md`, `runbook.md`, `configs.md`); worknote content may cite them by pointer.
+- **`<<! ... >>` blocks are the human's input channel.** Agents never rewrite, consume, or echo a context block into replacement content — the block is *input to* the work, never part of the filled output.
 - Replacement style matches the surrounding human text (voice, heading depth, table conventions) per `complete-report`.
 
 ## Arguments & invocation modes
@@ -44,6 +46,8 @@ Classify every placeholder during the plan phase:
 | **fill-from-data** | Answerable from shared memory, the job ledger, or existing artifacts. | Direct generation in the orchestrating session (standard `complete-report`). |
 | **needs-work** | Requires running jobs or analysis in a specific workdir. | Dispatched to a placeholder-agent (Mode A) or claimed by a tab (Mode B). |
 
+**Context blocks are not classified.** A `<<! ... >>` block is never a task; it *informs* the classification of the placeholders in its span (its `@memory` / `@run` directives and its prose are inputs to the decision).
+
 ## Hint directives
 
 Placeholders may embed optional directives. These are **hints, not a DSL** — interpret best-effort, confirm in plan mode:
@@ -54,6 +58,78 @@ Placeholders may embed optional directives. These are **hints, not a DSL** — i
 | `<<@memory ...>>` | Answer from shared memory only; do not run jobs → fill-from-data. |
 | `<<@run ...>>` | Expect job submission → classify as needs-work. |
 
+A directive may also sit **in a context block** (`<<! @dir:/work/exp-a all jobs here run in exp-a >>`), where it becomes a **span-wide default** inherited by every placeholder in that span — overridable by the placeholder's own directive. See "Context blocks".
+
+## Context blocks — `<<! ... >>`
+
+A context block is **input, not a task**: a way for the human to pin **persistent context** onto the placeholders an agent will fill ("all jobs in this section run in `/work/exp-a`", "this chapter is the tp=8 sweep, baseline srun-500") without repeating it in every placeholder body — and without losing it the moment a placeholder is replaced.
+
+- **Grammar.** Identical to a placeholder — `<<[^<>]+?>>`, DOTALL — whose body **starts with `!`** (leading whitespace tolerated, so `<< ! ctx >>` is also a context block — the fail-safe direction is *never dispatch human context as a task*). **Scan first, partition after**: one regex, then split on the leading `!`. No nested `<`/`>` (same class), so `complete-report`'s scan is untouched.
+- **`<`/`>` workaround.** Because the body forbids `<` and `>`, write `gt` / `→` in prose (`throughput gt 1200`), or park long context in research-memory and cite it (`<<! setup per runbook §Submit >>`).
+
+### Span — positional, bounded by markdown structure
+
+For a context block on line `Lc`:
+
+1. The **nearest heading at or above `Lc`** gives level `H` (no heading above it → `H = 0`, the preamble).
+2. Its **span** runs from `Lc` to the line before the **next heading of level ≤ `H`**, or EOF. `H = 0` spans to EOF (global context).
+
+**Heading** means **ATX only** (`#`…`######`, up to three leading spaces). A `Title` underlined by `===` / `---` (setext) is **not** a heading here — use `#` headings in a worknote you want scoped; this also keeps YAML frontmatter's closing `---` from splitting the file. A `#` line **inside a ``` or ~~~ fence**, or **inside a `<<...>>` body**, is likewise not a heading, so neither a code sample nor a placeholder's own text (a shell comment, a numbered step) can close a context block's span. Note the asymmetry: fenced regions are skipped when finding *headings*, but a `<<...>>` written inside a fence is still matched as a placeholder. Note too that a block placed under a `# Title` is level-1-scoped, not file-global: truly global context sits **above the first heading**.
+
+The span is **positional**: it reaches *from its own line downward*. A placeholder **above** the marker in the same section does **not** inherit it. Put a block where you want its reach to start — typically directly under the heading.
+
+### Chain — ordered inheritance, and the hiding contract
+
+A placeholder inherits **every context block whose span contains its line**, ordered by `Lc` ascending = **outermost → innermost** (global → section → subsection). Spans are properly nested or disjoint by construction, so the order is unambiguous — including two blocks under one heading, where the second's span is contained in the first's.
+
+- **Precedence**: later in the chain wins; the placeholder's own body/directives override all of it.
+- **Effective directives**: `@dir` / `@memory` / `@run` are merged along the chain under that same rule; `effective_dir` is the last `@dir` seen, unless the placeholder carries its own. `@memory` and `@run` are **mutually exclusive** — the later one evicts the earlier, so a placeholder's own `@run` beats an inherited `@memory` rather than setting both.
+- **Recording the chain**: the task file's `context:` line serializes the chain as its block texts joined by ` | `, outermost → innermost (whitespace-collapsed), or the literal `none` for an empty chain. `context-drift` compares against exactly that.
+- **Hiding contract**: a placeholder inherits **nothing from unrelated sections**, and a dispatch carries **only that placeholder's chain**. This is not cosmetic — it is what keeps a huge worknote's context out of every agent's prompt.
+
+### Lifecycle — persistent
+
+A context block is **never stamped, never claimed, never dispatched, never filled, never listed by `status`, and never inflates the id counter**. It survives every round until the human deletes it.
+
+- **Context edit while RUNNING = supersede**, symmetric with the `task:`-drift rule: a **planning scan** appends a `cancelled`/superseded row for the old dispatch and re-dispatches `#id` with the new chain (a fresh Attempt); a **`status` scan only reports** it, as a `context-drift` row.
+
+### Worked example
+
+```
+<<! GLOBAL: worknote covers the Q3 tp-sweep; baseline is job srun-500 >>
+
+# Experiment A
+
+<<! @dir:/work/exp-a all jobs in this chapter run in exp-a >>
+
+## Throughput
+
+<<! compare against the baseline, report tok/s only >>
+
+<<#1 sweep tp=4,8 and report>>
+
+# Experiment B
+
+<<#2 rerun the memory profile>>
+```
+
+`#1` inherits, outermost → innermost: the global block, the `# Experiment A` block (giving `effective_dir = /work/exp-a`), and the `## Throughput` block. `#2` inherits **only the global block** — the `# Experiment B` heading is level 1, so it closes both Experiment-A spans; `#2` sees nothing about exp-a or tok/s.
+
+## Scanning — use `wn_scan.py`
+
+Span and chain resolution is mechanical, is the part an LLM does worst by eye, and must not require pulling a huge worknote into the coordinator's context. Prefer the bundled script:
+
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/worknote-orchestrate/scripts/wn_scan.py <worknote> \
+  [--memory <store>] [--id N] [--format json|table]
+```
+
+- **Expand `${CLAUDE_PLUGIN_ROOT}` before dispatching** — a dispatched subagent does not inherit the variable, so pass the absolute path in its prompt (same requirement the `research-memory init` templates path carries).
+- **Read-only guarantee.** The script never writes. All worknote writes stay `Edit`-based per the locate-by-id discipline — the worknote is human-owned and a script must never rewrite it.
+- **What it returns.** `--format json` (default): `{worknote, duplicate_ids, next_id, next_id_sources, context_blocks[], placeholders[]}`; each placeholder carries `id, line, state, owner, job, since, task, section, context_chain[] ({line, source_heading, text}), effective_dir, directives, context_drift`. `duplicate_ids` lists any id stamped on more than one placeholder — a non-empty list is a worknote defect to fix before dispatching. `context_drift` is reported only for a **claimed** (`RUNNING`/`BLOCKED`) marker and is `null` for a `pending` one, so a stale task file from a finished round cannot make an unclaimed placeholder look drifted. For a still-`pending` placeholder, `task` is its body with the stamped `#id` removed (marker fields are parsed only for `RUNNING`/`BLOCKED`). `--id N` emits just that placeholder's object — **this is what a dispatch pastes**, so hiding is mechanical rather than a judgment call; a `#id` stamped on more than one placeholder is an **error**, never a silent pick. `--format table` prints `id · state · owner · job · age · ctx` for the `status` invocation, rendering a `BLOCKED` marker that carries an `A:` as `blocked+answered`. Exit `0` on success (including `--help`), `2` on usage/parse error.
+- **Out of scope for the script** (agent-driven, they need `jobs.md` + MEMORY.md reconciliation): `stale-claim`, `orphaned-job`, `done-but-unwritten`, `promotion-drift`.
+- **Fallback.** The prose above is **normative**; the script is the preferred implementation. When the script isn't reachable, execute the same algorithm by hand with `Grep` (multiline) — both must stay in sync.
+
 ## Placeholder ids — stamped at plan approval
 
 Every marker and Mode B invocation uses a stable `#<id>`, so ids must be defined, not derived from scan order (scan-order ordinals shift the moment the human inserts a placeholder above an existing one).
@@ -63,6 +139,8 @@ Every marker and Mode B invocation uses a stable `#<id>`, so ids must be defined
   1. **Marker ids in the worknote** — a `#N` that immediately follows `<<`, `<<RUNNING`, or `<<BLOCKED` (i.e. the placeholder's *own* id). A `#N` inside a placeholder *body* (e.g. `<<#7 see issue #123>>`) is a prose ref and must **not** inflate the counter — only the id at the head of the placeholder counts.
   2. **Archived task files** — the `<id>` in every `research-memory/tasks/task-<id>.md` filename.
   3. **Blocker entries** — every `BLOCKED#<id>` in `blockers.md`.
+
+  **Context blocks carry no id and never inflate the counter** — they are partitioned out before ids are counted. `wn_scan.py` computes `next_id` over all three sources (sources 2 and 3 need `--memory`).
 
   Deleting a placeholder never frees its id: once all markers complete, sources 2 and 3 still pin the max, so a later scan will not reuse an id that already owns a `task-<id>.md` file or a blocker entry.
 - **Human-added placeholders get stamped at the next scan.** A fresh `<<...>>` with no `#id` is assigned the next id on the following scan (the next planning scan — `status` never stamps). The only other stamp site is a **Mode B claim on an un-stamped target**, which stamps exactly one placeholder (see Mode B "Stamp-on-claim").
@@ -107,7 +185,7 @@ running  --> running    (superseded: human edited task:, re-dispatched with new 
 One coordinator session runs the whole-file invocation:
 
 1. Scan + classify + plan-mode approval (per Classification and Risk-based selection below). On plan approval, call research-memory `set-focus` with the active `#id`s + one-line intents so MEMORY.md "Current focus" reflects this round.
-2. Dispatch each approved needs-work placeholder to a **placeholder-agent** — a subagent instructed to `cd` into the target workdir first. Independent placeholders are dispatched **in parallel** (one message, multiple `Agent` calls). Before dispatching, flip the placeholder to `<<RUNNING#id owner=agent job=pending since=... task: ...>>` — the job id does not exist until the agent submits, so the coordinator writes `job=pending` and the agent fills the real id once it has one (skeleton step 3).
+2. **Resolve the context chain before the claim write** — `wn_scan.py <worknote> --id <id> --memory <store>` gives the placeholder's ordered chain and `effective_dir`; paste exactly that chain into the dispatch prompt and record it via `task-note` into the Brief/Attempt. Then dispatch each approved needs-work placeholder to a **placeholder-agent** — a subagent instructed to `cd` into the target workdir first. Independent placeholders are dispatched **in parallel** (one message, multiple `Agent` calls). Before dispatching, flip the placeholder to `<<RUNNING#id owner=agent job=pending since=... task: ...>>` — the job id does not exist until the agent submits, so the coordinator writes `job=pending` and the agent fills the real id once it has one (skeleton step 3).
 3. Placeholder-agents **never block on human input.** On a blocker they: write a structured `blockers.md` entry via research-memory `add-blocker`, flip the placeholder to `<<BLOCKED#id ...>>`, and return a status line.
 4. The coordinator collects completions and **serializes ALL pending blockers into a single `AskUserQuestion` round** — one interrupt instead of N scattered ones. In this same completion/blocker round it refreshes MEMORY.md "Current focus" via `set-focus` — **drop the finished `#id`s** and keep only the still-open/blocked ones; Current focus is forward-looking, so **never add a per-placeholder `DONE #N` bullet** (a completed placeholder is recorded in Validated conclusions, `jobs.md`, and the task Outcome, not here) — and **reconciles owned job ids to terminal rows**: when a round closes or a shared pool/reservation is released, every job id owned by a completed `#id` must resolve in `jobs.md` to a terminal row (`finished`/`failed`/`cancelled`) — a job left at `submitted`/`running` with no live owner is stale; append the terminal row (its own, never folded into another job's) or flag it for the human. A **released/scancelled pool reservation** closes as **`cancelled`** (release reason in the result ptr), never `finished` or the non-status `released`.
 5. Each answer is written into its blocker's `Answer:` field via research-memory `answer-blocker <id> <text>` (and inline into the marker), and the affected placeholders are immediately re-dispatched (`BLOCKED` → `RUNNING`) with the answer embedded in the fresh agent's prompt. Re-activation rewrites the marker to `<<RUNNING#id owner=agent job=pending since=... task: ...>>` — the same `job=pending` claim rule as step 2, since the fresh agent has no job id until it submits.
@@ -124,6 +202,7 @@ The human opens a Worktrees tab in the sub-project's workdir and invokes on **on
 The tab session claims the placeholder (writes `<<RUNNING#id owner=tab:{name} job=pending ...>>`), then works **interactively** with the human — a normal chat-driven debug loop with full conversational bandwidth. On completion it replaces the placeholder and updates memory. Feedback is per-tab; the human schedules attention across tabs.
 
 - **Stamp-on-claim (never-planned worknote).** Ids are normally stamped by planning scans, so on a fresh worknote a `#<id>` target may match **no stamped placeholder or marker at all** — resolution is by id, and a never-planned worknote has nothing for `#<id>` to match. When the lookup finds no stamped `#<id>`, Mode B **lists the un-stamped placeholders** (quoted body snippets) and **asks the human to pick one**; it then stamps **only that one placeholder** with the next id (the `max`-over-three-sources rule under "Placeholder ids") as part of the claim write — it does not stamp the rest of the file (that stays a planning-scan job).
+- **Resolve the chain before the claim write.** Run `wn_scan.py <worknote> --id <id>` (after stamping, if this is a stamp-on-claim) and record the resolved chain via `task-note` into the task file's Brief (`context:`) and the fresh Attempt — that Attempt line is what `context-drift` compares against.
 - **Same task-file discipline as Mode A.** Mode B follows the Mode A skeleton's task-file discipline and promotion protocol: on claim, open a fresh Attempt via `task-note <id> ...` (creating `tasks/task-<id>.md` on first claim); record jobs/configs/learnings at the right level as work proceeds; on completion, refresh Current focus via `set-focus` to **drop the finished `#id`** (never append a `DONE #N` bullet — completion is recorded in Validated conclusions, `jobs.md`, and the task Outcome); FIRST promote any worknote-level conclusion via `promote-conclusion <id> <text>` (a pointer back to the task file) and READ BACK — bounded-grep MEMORY.md for `tasks/task-<id>.md` under "Validated conclusions"; on read-back failure retry the promote once. THEN fill the task-file **Outcome** exactly ONCE (write-once), embedding the verified `promoted:` value — or `promoted: FAILED (<reason>)` if the read-back still failed, so drift stays visible. This gives a Mode B takeover/restart the same L3 state a Mode A restart relies on.
 
 ## Claiming protocol — what makes the modes coexist
@@ -139,6 +218,7 @@ The human treats the worknote as a live control surface. Every re-scan reconcile
 
 - **Cancel = delete the marker.** A ledger-RUNNING job whose marker has vanished is treated as **cancelled**: a **planning scan** appends a `cancelled` row to `jobs.md` (a `status` scan only flags it as `orphaned-job`). The same cancelled row is written by an agent that re-greps and can't find its own marker — that is the agent's own "results never lost" accounting, not a `status` write. The coordinator may *optionally* kill the underlying job, but **never auto-kills silently** — it asks in the batched question round.
 - **Update = edit the marker's `task:` text.** The `task:` field is the human's intent channel. On a **planning scan** the coordinator compares each RUNNING marker's `task:` against the dispatch recorded in `jobs.md`. Drift means **supersede**: append a `cancelled`/superseded row for the old dispatch and **re-dispatch `#id` with the new task text** (a fresh Attempt). A `status` scan only reports the drift; it never supersedes or re-dispatches. The same comparison on a still-pending stamped placeholder is trivial — the new text is simply what gets dispatched.
+- **Context edit = supersede.** Editing, adding, moving, or deleting a `<<! ... >>` block changes the resolved chain of every placeholder in its span. On a **planning scan** the coordinator re-resolves each RUNNING marker's chain (`wn_scan.py --id N --memory ...`) and compares it against the `context:` line of the latest Attempt in `tasks/task-<id>.md`. Drift means **supersede**: append a `cancelled`/superseded row for the old dispatch and re-dispatch `#id` with the new chain (a fresh Attempt). A `status` scan only *reports* it as a `context-drift` row — no writes, no re-dispatch. Same planning-scan-writes / `status`-reports-only split as the `task:`-drift bullet above.
 - **Editing prose anywhere else is always safe** and requires nothing from agents.
 
 ### Locate-by-id marker writes (edit resilience)
@@ -168,6 +248,7 @@ Columns: **id · state · owner · job id · age**. An un-stamped `pending` plac
 | `stale-claim` | `RUNNING` marker but its ledger job is finished/failed/unknown — resumable/reassignable |
 | `orphaned-job` | ledger-RUNNING job with no marker in the worknote (human deleted it → cancel candidate) |
 | `done-but-unwritten` | memory/task-file shows the result recorded but the marker was never replaced |
+| `context-drift` | the placeholder's resolved `<<! ... >>` chain differs from the `context:` line of the latest Attempt in `tasks/task-<id>.md` — the human edited the context under a running task; superseded by the next planning scan, only reported here |
 | `promotion-drift` | a task file's Outcome claims `promoted:` but MEMORY.md has no "Validated conclusions" bullet pointing at `tasks/task-<id>.md` — detected, never fixed, by `status` (like `done-but-unwritten`) |
 
 `status` never resolves any of these — it only reports. Acting on them happens in the next whole-file or `#id` invocation.
@@ -218,6 +299,10 @@ Working directory: <absolute target workdir>   (cd here first)
 Worknote: <absolute worknote path>
 Placeholder id: #<id>
 Task: <the placeholder's inner text / approved strategy>
+Context (inherited, outermost → innermost): <one line per context block + its source §heading,
+  from `wn_scan.py --id <id>`; "none" if the chain is empty>
+  This is the COMPLETE applicable context — do NOT scan the worknote for other `<<! ... >>` blocks,
+  and never rewrite, consume, or echo a `<<! ... >>` block into your replacement content.
 Answer from prior blocker (if re-activation): <human answer, or "none">
 
 Steps:
@@ -230,7 +315,9 @@ Steps:
    `query <other>.md <question>` — the skill deduces `<other>.memory/` beside that worknote and is
    strictly read-only; never write into a foreign store.
 2. Open a NEW attempt: call research-memory `task-note <id> ...` to start a `### Attempt N` section
-   (creates tasks/task-<id>.md from template on first claim). Attempt N+1 must NOT repeat attempt N's
+   (creates tasks/task-<id>.md from template on first claim). Record the Context chain given above
+   verbatim as the Attempt's `- context:` line (and the Brief's on first claim) — that line is what
+   `context-drift` compares against on the next scan. Attempt N+1 must NOT repeat attempt N's
    dead ends recorded in the file.
 3. Run the task (submit/monitor/collect the job per ./research-memory/runbook.md). Your marker was
    claimed with `job=pending`; as soon as you have a real job id, record it via `add-job` (step 4) and
@@ -277,8 +364,8 @@ Steps:
 | Role | Responsibilities |
 |---|---|
 | **Human** | Owns worknote structure + prose; answers batched blockers; runs Mode B for tricky work; decides mode overrides at plan time. |
-| **Coordinator** (whole-file session) | Scan, id-stamp, classify, plan; set MEMORY.md "Current focus" via `set-focus` at plan approval and refresh it in the completion/blocker round; reconcile markers vs `jobs.md` (cancel/supersede) and reconcile owned job ids to terminal rows when a round closes or a pool is released; dispatch placeholder-agents; batch blocker feedback into ONE question round; fill fill-from-data placeholders; re-dispatch answered/superseded blockers; surface any `done (worknote not updated)` lines in the summary. |
-| **Placeholder-agent** (subagent, per workdir) | `cd` workdir; bounded-read memory + `tasks/task-<id>.md`; open a fresh Attempt; run jobs; record everything via research-memory (promotion protocol); locate-by-id then replace its placeholder on success or flip to `BLOCKED`; never block on human input; never lose a result if the marker vanished. |
+| **Coordinator** (whole-file session) | Scan (`wn_scan.py`), id-stamp, classify, plan; **resolve and scope each placeholder's `<<! ... >>` context chain, passing only that chain into its dispatch**; set MEMORY.md "Current focus" via `set-focus` at plan approval and refresh it in the completion/blocker round; reconcile markers vs `jobs.md` (cancel/supersede) and reconcile owned job ids to terminal rows when a round closes or a pool is released; dispatch placeholder-agents; batch blocker feedback into ONE question round; fill fill-from-data placeholders; re-dispatch answered/superseded blockers; surface any `done (worknote not updated)` lines in the summary. |
+| **Placeholder-agent** (subagent, per workdir) | **treats the context chain given in its prompt as COMPLETE** (never scans the worknote for other `<<! ... >>` blocks, never rewrites one); `cd` workdir; bounded-read memory + `tasks/task-<id>.md`; open a fresh Attempt; run jobs; record everything via research-memory (promotion protocol); locate-by-id then replace its placeholder on success or flip to `BLOCKED`; never block on human input; never lose a result if the marker vanished. |
 | **Shared memory** ([[research-memory]]) | Ground truth: configs, runbook, job ledger, blockers — the only cross-session channel. |
 
 ## End-to-end note

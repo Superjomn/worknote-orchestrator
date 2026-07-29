@@ -2,7 +2,7 @@
 name: research-memory
 description: "Lifecycle for a shared, machine-facing research memory that sits next to a human worknote — the ground-truth store (configs, runbook, job ledger, blockers) for all sub-project sessions. All writes are dispatched to subagents to keep the main context lean. TRIGGER when: user says research-memory init/link/add-job/update-config-status/add-learning/add-script/task-note/add-blocker/answer-blocker/promote-conclusion/set-focus/show-summary/query, /research-memory, \"research memory\", \"shared worknote memory\", \"refer to <worknote>.md worknote memory\", \"ask the memory / how to reproduce / where is <artifact>\", or wants to record OR look up a job/config/learning/blocker beside a worknote."
 author: Chunwei Yan
-version: 0.7.0
+version: 0.8.0
 user_invocable: true
 ---
 
@@ -146,7 +146,7 @@ Row/entry schema for this action (fill EVERY column; refuse if you cannot):
  jobs.md row: | timestamp | job id | purpose | config ref | owner | status | result ptr |  (status ∈ submitted/running/finished/failed/cancelled)
  configs.md row: | id/path | workdir | status | key knobs | evidence |  (status ∈ untested/working/failed/superseded)
  blockers.md entry: ### BLOCKED#<id> — <title> / timestamp / workdir / placeholder ref / task file / Question / Evidence / Answer:
- tasks/task-<id>.md: Brief / Attempts (### Attempt N: tried, jobs, outcome, next step) / Working notes / Outcome
+ tasks/task-<id>.md: Brief (task, workdir, worknote, context, blockers) / Attempts (### Attempt N: context, tried, jobs, outcome, next step) / Working notes / Outcome
 >
 Evidence pointer is REQUIRED for add-job, update-config-status, and add-blocker. No evidence → refuse and report why.
 

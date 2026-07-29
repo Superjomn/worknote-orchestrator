@@ -25,6 +25,9 @@
 #   Q2          -> query-nsys       (jobs.md: 2 .nsys-rep ptrs + 1 non-nsys; task-1 has a 3rd nsys path)
 #   Q3          -> query-foreign    (sibling Prod.md + Prod.memory/ holding the answer; local store fresh)
 #   Q4          -> query-fallback   (sibling Notes.md fact ONLY in markdown; no Notes.memory/ beside it)
+#   X1          -> worknote-context   (preamble/S1/S2 context blocks + placeholders #1/#2)
+#   X2          -> worknote-context-unstamped (un-stamped <<...>> interleaved with <<! ... >>)
+#   X3          -> worknote-context-drift (RUNNING#1 under a new context block; task-1 Attempt has the old)
 #   Q5          -> query-miss       (pristine store; question about an absent fact -> NOT FOUND)
 set -euo pipefail
 
@@ -40,6 +43,8 @@ STORE="$SCRATCH/research-memory"
 rm -rf "$STORE" "$SCRATCH/research-memory.orig" \
        "$SCRATCH/Prod.memory" "$SCRATCH/Prod.memory.orig"
 rm -f "$SCRATCH/refusal.txt" "$SCRATCH/answer.txt" \
+      "$SCRATCH/Scratch.md" "$SCRATCH/Scratch.md.orig" \
+      "$SCRATCH/dispatch-2.txt" "$SCRATCH/status-output.txt" \
       "$SCRATCH/Prod.md" "$SCRATCH/Notes.md"   # query/refusal captures live in $SCRATCH, not the store
 mkdir -p "$STORE/tasks"
 
@@ -651,6 +656,57 @@ Task #2 completed (result recorded in research-memory/tasks/task-2.md).
 EOF
 }
 
+build_worknote_context() {
+  copy_templates
+  cat > "$SCRATCH/Scratch.md" <<'EOF'
+# Context scoping worknote
+
+<<! GLOBAL-CTX-AAA baseline is job srun-500 >>
+
+## S1
+
+<<! SEC1-CTX-BBB report tok/s only >>
+
+<<#1 sweep tp=4 and report>>
+
+## S2
+
+<<! SEC2-CTX-CCC use the nsys recipe >>
+
+<<#2 profile the decode phase>>
+EOF
+}
+build_worknote_context_unstamped() {
+  copy_templates
+  cat > "$SCRATCH/Scratch.md" <<'EOF'
+# Un-stamped worknote
+
+<<! GLOBAL-CTX-AAA baseline is job srun-500 >>
+
+## S1
+
+<<measure baseline throughput>>
+
+<<! SEC1-CTX-BBB report tok/s only >>
+
+<<profile the decode phase>>
+EOF
+}
+build_worknote_context_drift() {
+  copy_templates
+  make_task 1
+  # The Attempt records the OLD chain; the worknote now carries a NEW context block -> drift.
+  sed -i 's|^- context:.*|- context: OLD-CTX-FFF|' "$STORE/tasks/task-1.md"
+  cat > "$SCRATCH/Scratch.md" <<'EOF'
+# Context drift worknote
+
+## S1
+
+<<! NEW-CTX-EEE rerun against the v2 baseline >>
+
+<<RUNNING#1 owner=agent job=srun-777 since=2026-07-09 task: sweep tp=4>>
+EOF
+}
 build_worknote() {
   copy_templates
   make_task 1
@@ -700,6 +756,9 @@ case "$CASE" in
   L1)          build_near_cap ;;
   D1)          build_drifted ;;
   W1)          build_worknote ;;
+  X1)          build_worknote_context ;;
+  X2)          build_worknote_context_unstamped ;;
+  X3)          build_worknote_context_drift ;;
   Q1)          build_query_repro ;;
   Q2)          build_query_nsys ;;
   Q3)          build_query_foreign ;;
@@ -710,5 +769,7 @@ esac
 
 # Byte-for-byte snapshot for diff-based (refusal / no-mirror) assertions.
 cp -r "$STORE" "$SCRATCH/research-memory.orig"
+# Worknote snapshot too, for the read-only worknote cases (X1).
+if [ -f "$SCRATCH/Scratch.md" ]; then cp "$SCRATCH/Scratch.md" "$SCRATCH/Scratch.md.orig"; fi
 
 echo "setup $CASE done — store at $STORE (snapshot: $SCRATCH/research-memory.orig)"

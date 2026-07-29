@@ -8,12 +8,14 @@
 - task: <the placeholder's inner text / approved strategy>
 - workdir: <absolute target workdir>
 - worknote: <absolute worknote path>#<id>
+- context: <resolved `<<! ... >>` chain at first claim: block texts joined by ` | `, outermost → innermost; `none` if empty>
 - blockers: <blocker ids raised by this task, or none>
 
 ## Attempts
 <!-- Append one `### Attempt N` section per dispatch. Never rewrite a prior attempt. -->
 
 ### Attempt 1 — <YYYY-MM-DD HH:MM>
+- context: <chain resolved for this dispatch, same ` | ` form (or `none`) — what `context-drift` compares against>
 - tried: <what was attempted>
 - jobs: <job ids submitted this attempt, or none>
 - outcome: <succeeded | failed | blocked (blocker id) — what happened>
