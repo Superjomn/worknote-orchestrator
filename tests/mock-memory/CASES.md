@@ -1,11 +1,11 @@
-# Mock-memory test cases — 0.5.0 / 0.7.0 feature coverage
+# Mock-memory test cases — 0.5.0 / 0.7.0 / 0.8.0 feature coverage
 
-A persistent, repeatable fixture for the 0.4.0/0.5.0/0.7.0 research-memory / worknote-orchestrate
+A persistent, repeatable fixture for the 0.4.0/0.5.0/0.7.0/0.8.0 research-memory / worknote-orchestrate
 features (`promote-conclusion`, `set-focus`, Reference-configs mirroring incl. the
 `working → failed` regression mirror, template hygiene, read-back verification,
 `promotion-drift`, jobs.md status-vocabulary enforcement, config-ref auto-registration,
 `working`-verdict evidence gating, and the read-only `query` action — memory QA +
-cross-worknote reference). Each case = a fixture built by `setup.sh`, an
+cross-worknote reference; 0.8.0 `<<! ... >>` scoped context blocks). Each case = a fixture built by `setup.sh`, an
 **LLM-executed** memory action, and a `assert.sh` post-condition.
 
 The memory "actions" are natural-language instructions the agent performs by following
@@ -25,7 +25,10 @@ the dispatch skeleton in `skills/research-memory/SKILL.md`. Only **fixture setup
   `$S/refusal.txt` (in `$SCRATCH`, **not** the store, so the byte-identical `diff -r` is
   unaffected); `assert.sh` greps it for the per-case rule keyword so a wrong-reason refusal
   or a crash cannot pass.
-- **D1** runs the read-only `status` invocation, not a memory action.
+- **D1** and **X3** run the read-only `status` invocation, not a memory action.
+- **Context cases (X1–X3)** exercise `<<! ... >>` scoped context blocks. Use
+  `skills/worknote-orchestrate/scripts/wn_scan.py` (read-only) to resolve spans/chains. Captures
+  (`dispatch-2.txt`, `status-output.txt`) land in `$SCRATCH`, **never** in the store.
 - **W1** simulates a read-back failure with `chmod 444` on `MEMORY.md`; restore perms after.
 - **Query cases (Q1–Q5)** run the **read-only** `query` action. The agent follows the
   "Query dispatch skeleton" in `skills/research-memory/SKILL.md`, then writes the returned
@@ -383,6 +386,59 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
   new Reference line — the shortlist keeps only the family-best).
 - **Assert:** `bash tests/mock-memory/assert.sh C6 "$S"`
 
+## X1 — context hiding: a dispatch carries only its own chain
+
+- **Fixture:** `worknote-context` — `Scratch.md` with a preamble `<<! GLOBAL-CTX-AAA … >>`,
+  `## S1` holding `<<! SEC1-CTX-BBB … >>` + `<<#1 …>>`, and `## S2` holding
+  `<<! SEC2-CTX-CCC … >>` + `<<#2 …>>`.
+- **Setup:** `bash tests/mock-memory/setup.sh X1 "$S"`
+- **Action** (build the dispatch prompt for `#2` — **no agent run, no writes**):
+
+  > For `$S/Scratch.md`, resolve the context chain of placeholder `#2` (e.g.
+  > `python3 skills/worknote-orchestrate/scripts/wn_scan.py "$S/Scratch.md" --id 2`) and build the
+  > Mode A placeholder-agent dispatch prompt for `#2` per the SKILL.md skeleton, including the
+  > `Context (inherited, outermost → innermost):` field. Do NOT dispatch it and do NOT write to the
+  > worknote. Save the full prompt text to `$S/dispatch-2.txt`.
+
+- **Expected:** the prompt contains `GLOBAL-CTX-AAA` and `SEC2-CTX-CCC` and **not**
+  `SEC1-CTX-BBB` (hiding); `Scratch.md` byte-identical.
+- **Assert:** `bash tests/mock-memory/assert.sh X1 "$S"`
+
+## X2 — id-stamping never stamps a context block
+
+- **Fixture:** `worknote-context-unstamped` — un-stamped `<<...>>` placeholders interleaved with
+  `<<! ... >>` context blocks.
+- **Setup:** `bash tests/mock-memory/setup.sh X2 "$S"`
+- **Action** (planning-scan id-stamping step):
+
+  > Run the planning scan's id-stamping step on `$S/Scratch.md`: scan for `<<[^<>]+?>>`, partition
+  > out every match whose body starts with `!` (context blocks — never stamped, never counted), and
+  > stamp each remaining un-stamped placeholder with the next id per the `max`-over-three-sources
+  > rule (store `$S/research-memory`). Edit the worknote top-to-bottom. Stamp nothing else.
+
+- **Expected:** the two real placeholders become `<<#1 …>>` / `<<#2 …>>`; both context blocks are
+  byte-identical (no `<<!#` anywhere).
+- **Assert:** `bash tests/mock-memory/assert.sh X2 "$S"`
+
+## X3 — `context-drift` detection via `status`
+
+- **Fixture:** `worknote-context-drift` — `Scratch.md` has `<<RUNNING#1 …>>` under
+  `<<! NEW-CTX-EEE … >>`; `tasks/task-1.md`'s Attempt records `context: OLD-CTX-FFF`.
+- **Setup:** `bash tests/mock-memory/setup.sh X3 "$S"`
+- **Action** (read-only worknote-orchestrate `status`, mirrors D1):
+
+  > Run `/worknote-orchestrate "$S/Scratch.md" status` — read-only (no writes, no dispatches, no
+  > stamping). Resolve each placeholder's `<<! ... >>` chain and compare it against the `context:`
+  > line of the latest Attempt in `research-memory/tasks/task-<id>.md`. Save the resulting status
+  > table to `$S/status-output.txt`.
+
+  Because the Attempt records `OLD-CTX-FFF` while the resolved chain is `NEW-CTX-EEE`, the table
+  must show a `context-drift` row for id 1.
+
+- **Expected:** status table has a `context-drift` row for id 1 (detected, never fixed); store
+  byte-identical.
+- **Assert:** `bash tests/mock-memory/assert.sh X3 "$S"`
+
 ## Q1 — query: how to reproduce the last job
 
 - **Fixture:** `query-repro` — `runbook.md` §Submit has `sbatch --nodes=2 run.sh <config>`;
@@ -496,6 +552,9 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 | L1 | ≤150-line curation on promote (pointers preserved) |
 | D1 | `promotion-drift` detection by `status` (read-only) |
 | W1 | read-back failure → `promoted: FAILED` (Outcome write-once) |
+| X1 | `<<! ... >>` context hiding — a dispatch carries only its own resolved chain |
+| X2 | id-stamping partitions out context blocks (never stamped, never counted) |
+| X3 | `context-drift` detection by `status` (read-only) |
 | Q1 | `query` — reproduce the last job (jobs.md EOF → configs key knobs → runbook §Submit) |
 | Q2 | `query` — list all nsys reports (jobs.md ptrs + task Attempts; excludes non-nsys) |
 | Q3 | `query <worknote>` — foreign reference via deduced `<Base>.memory/` (read-only) |
