@@ -6,7 +6,7 @@
 ## Status legend
 
 - `untested` — created/edited, not yet run to a verdict.
-- `working` — a job succeeded and the result was verified. Safe to parallelize (Mode A).
+- `working` — a job succeeded and the result was verified. Eligible for Mode A after checking independence and authorized resources.
 - `failed` — a job with this config failed.
 - `superseded` — replaced by a better validated config (link to the successor).
 

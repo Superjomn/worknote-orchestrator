@@ -1,8 +1,9 @@
 # Task #<id> — <short title>
 
-<!-- L3 per-task working state. Read/written ONLY by the owner or restarter of #<id>. -->
-<!-- Created lazily on first claim of #<id>. Detail lives here; only curated facts flow up. -->
-<!-- Attempts are APPEND-ONLY. Working notes are mutable scratch. Outcome is filled once. -->
+<!-- L3 per-task state. Owner/restarter and coordinator read it; serialize updates. -->
+<!-- Created on ID reservation, including fill-from-data tasks. Never delete to recycle an ID. -->
+<!-- Active Attempt fields may be updated by its owner; closed Attempts are immutable. -->
+<!-- Working notes hold late results/publication status. Final Outcome is filled once. -->
 
 ## Brief
 - task: <the placeholder's inner text / approved strategy>
@@ -12,19 +13,22 @@
 - blockers: <blocker ids raised by this task, or none>
 
 ## Attempts
-<!-- Append one `### Attempt N` section per dispatch. Never rewrite a prior attempt. -->
+<!-- Append one Attempt per dispatch; remove this example for an ID-only reservation. -->
+<!-- Keep task/context/owner snapshots fixed; update active progress until closing it. -->
 
 ### Attempt 1 — <YYYY-MM-DD HH:MM>
+- task: <approved task text for this dispatch>
+- owner: <agent or tab:name>
 - context: <chain resolved for this dispatch, same ` | ` form (or `none`) — what `context-drift` compares against>
 - tried: <what was attempted>
 - jobs: <job ids submitted this attempt, or none>
-- outcome: <succeeded | failed | blocked (blocker id) — what happened>
+- outcome: <active | succeeded | failed | blocked (blocker id) | cancelled | superseded — what happened>
 - next step: <what the next attempt should do differently; dead ends to skip>
 
 ## Working notes
 <!-- Mutable scratch: partial results, hypotheses, intermediate numbers. -->
 
 ## Outcome
-<!-- Filled ONCE, on completion. -->
+<!-- Filled ONCE for current-task completion after promotion read-back, before publication. -->
 - conclusion: <final result — conclusions only>
-- promoted: <what flowed up and where: configs.md#<id> / runbook §<section> / MEMORY.md bullet>
+- promoted: <what flowed up and where: configs.md#<id> / runbook §<section> / MEMORY.md bullet / none / FAILED (reason)>

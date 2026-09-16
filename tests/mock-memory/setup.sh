@@ -38,6 +38,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES="$SCRIPT_DIR/../../skills/research-memory/templates"
 [ -d "$TEMPLATES" ] || { echo "FATAL: templates dir not found: $TEMPLATES" >&2; exit 2; }
 
+case "$CASE" in
+  R[1-6]) exec python3 "$SCRIPT_DIR/reliability.py" setup "$CASE" "$SCRATCH" ;;
+esac
+
 mkdir -p "$SCRATCH"
 STORE="$SCRATCH/research-memory"
 rm -rf "$STORE" "$SCRATCH/research-memory.orig" \
@@ -48,13 +52,22 @@ rm -f "$SCRATCH/refusal.txt" "$SCRATCH/answer.txt" \
       "$SCRATCH/Prod.md" "$SCRATCH/Notes.md"   # query/refusal captures live in $SCRATCH, not the store
 mkdir -p "$STORE/tasks"
 
+# Portable in-place sed for BSD/macOS and GNU/Linux; preserves pipeline failure.
+sed_edit() {
+  local expression="$1" target="$2" tmp
+  tmp=$(mktemp "$SCRATCH/sed.XXXXXX")
+  sed "$expression" "$target" > "$tmp"
+  cat "$tmp" > "$target"
+  rm "$tmp"
+}
+
 copy_templates() {
   local f
   for f in MEMORY.md configs.md runbook.md jobs.md blockers.md; do
     cp "$TEMPLATES/$f" "$STORE/$f"
   done
   # Stamp the project name into MEMORY.md's heading (init would do this).
-  sed -i 's/^# <Project> — Research Memory Index/# Mock — Research Memory Index/' "$STORE/MEMORY.md"
+  sed_edit 's/^# <Project> — Research Memory Index/# Mock — Research Memory Index/' "$STORE/MEMORY.md"
 }
 
 # make_task <id> — create tasks/task-<id>.md from task.md with the id substituted.
@@ -187,7 +200,7 @@ write_configs_untested() {
 ## Status legend
 
 - `untested` — created/edited, not yet run to a verdict.
-- `working` — a job succeeded and the result was verified. Safe to parallelize (Mode A).
+- `working` — a job succeeded and the result was verified. Eligible for Mode A after checking independence and authorized resources.
 - `failed` — a job with this config failed.
 - `superseded` — replaced by a better validated config (link to the successor).
 
@@ -222,7 +235,7 @@ write_configs_working() {
 ## Status legend
 
 - `untested` — created/edited, not yet run to a verdict.
-- `working` — a job succeeded and the result was verified. Safe to parallelize (Mode A).
+- `working` — a job succeeded and the result was verified. Eligible for Mode A after checking independence and authorized resources.
 - `failed` — a job with this config failed.
 - `superseded` — replaced by a better validated config (link to the successor).
 
@@ -255,7 +268,7 @@ write_configs_untested_clean() {
 ## Status legend
 
 - `untested` — created/edited, not yet run to a verdict.
-- `working` — a job succeeded and the result was verified. Safe to parallelize (Mode A).
+- `working` — a job succeeded and the result was verified. Eligible for Mode A after checking independence and authorized resources.
 - `failed` — a job with this config failed.
 - `superseded` — replaced by a better validated config (link to the successor).
 
@@ -286,10 +299,10 @@ write_jobs_srun500_failed() {
 <!-- APPEND-ONLY. Never rewrite or reorder rows. -->
 <!-- One row per job. A status change appends a NEW row referencing the same job id. -->
 <!-- Job ids must be resolvable to status without the submitting agent's context. -->
-<!-- This ledger — not the placeholder marker — is authoritative for job liveness. -->
+<!-- Latest row per job is its last observed state; verify current liveness when needed. -->
 <!-- status ∈ submitted / running / finished / failed / cancelled. -->
 <!-- "unknown" is not a stored status — it means the job id could not be resolved to any of the above -->
-<!-- (e.g. scheduler forgot it); stale-claim logic treats an unresolvable id the same as finished/failed. -->
+<!-- (e.g. scheduler forgot it); unresolved liveness does not prove termination. -->
 
 | timestamp | job id | purpose | config ref | owner | status | result ptr |
 |---|---|---|---|---|---|---|
@@ -343,11 +356,11 @@ write_jobs_pool_running() {
 <!-- APPEND-ONLY. Never rewrite or reorder rows. -->
 <!-- One row per job. A status change appends a NEW row referencing the same job id. -->
 <!-- Job ids must be resolvable to status without the submitting agent's context. -->
-<!-- This ledger — not the placeholder marker — is authoritative for job liveness. -->
+<!-- Latest row per job is its last observed state; verify current liveness when needed. -->
 <!-- status ∈ submitted / running / finished / failed / cancelled. -->
 <!-- A scancelled/released pool reservation is recorded as `cancelled` (release reason in result ptr); `released` is not a status. -->
 <!-- "unknown" is not a stored status — it means the job id could not be resolved to any of the above -->
-<!-- (e.g. scheduler forgot it); stale-claim logic treats an unresolvable id the same as finished/failed. -->
+<!-- (e.g. scheduler forgot it); unresolved liveness does not prove termination. -->
 
 | timestamp | job id | purpose | config ref | owner | status | result ptr |
 |---|---|---|---|---|---|---|
@@ -398,7 +411,7 @@ write_configs_family() {
 ## Status legend
 
 - `untested` — created/edited, not yet run to a verdict.
-- `working` — a job succeeded and the result was verified. Safe to parallelize (Mode A).
+- `working` — a job succeeded and the result was verified. Eligible for Mode A after checking independence and authorized resources.
 - `failed` — a job with this config failed.
 - `superseded` — replaced by a better validated config (link to the successor).
 
@@ -425,11 +438,11 @@ EOF
 <!-- APPEND-ONLY. Never rewrite or reorder rows. -->
 <!-- One row per job. A status change appends a NEW row referencing the same job id. -->
 <!-- Job ids must be resolvable to status without the submitting agent's context. -->
-<!-- This ledger — not the placeholder marker — is authoritative for job liveness. -->
+<!-- Latest row per job is its last observed state; verify current liveness when needed. -->
 <!-- status ∈ submitted / running / finished / failed / cancelled. -->
 <!-- A scancelled/released pool reservation is recorded as `cancelled` (release reason in result ptr); `released` is not a status. -->
 <!-- "unknown" is not a stored status — it means the job id could not be resolved to any of the above -->
-<!-- (e.g. scheduler forgot it); stale-claim logic treats an unresolvable id the same as finished/failed. -->
+<!-- (e.g. scheduler forgot it); unresolved liveness does not prove termination. -->
 
 | timestamp | job id | purpose | config ref | owner | status | result ptr |
 |---|---|---|---|---|---|---|
@@ -647,8 +660,8 @@ build_drifted() {
   copy_templates
   make_task 2
   # task-2 Outcome CLAIMS a promotion that MEMORY.md does not carry -> drift.
-  sed -i 's|^- conclusion:.*|- conclusion: drift test — Outcome claims promotion, MEMORY.md has none|' "$STORE/tasks/task-2.md"
-  sed -i 's|^- promoted:.*|- promoted: MEMORY.md bullet (2026-07-09)|' "$STORE/tasks/task-2.md"
+  sed_edit 's|^- conclusion:.*|- conclusion: drift test — Outcome claims promotion, MEMORY.md has none|' "$STORE/tasks/task-2.md"
+  sed_edit 's|^- promoted:.*|- promoted: MEMORY.md bullet (2026-07-09)|' "$STORE/tasks/task-2.md"
   cat > "$SCRATCH/Scratch.md" <<'EOF'
 # Scratch worknote
 
@@ -696,7 +709,7 @@ build_worknote_context_drift() {
   copy_templates
   make_task 1
   # The Attempt records the OLD chain; the worknote now carries a NEW context block -> drift.
-  sed -i 's|^- context:.*|- context: OLD-CTX-FFF|' "$STORE/tasks/task-1.md"
+  sed_edit 's|^- context:.*|- context: OLD-CTX-FFF|' "$STORE/tasks/task-1.md"
   cat > "$SCRATCH/Scratch.md" <<'EOF'
 # Context drift worknote
 
@@ -745,7 +758,12 @@ case "$CASE" in
   P1|P3|P4|P5) build_fresh ;;
   J1|J2)       build_fresh ;;
   P2)          build_promoted ;;
-  C1|C3)       build_config_untested ;;
+  C1)          build_config_untested
+               # A working verdict needs actual finished evidence, not a template example.
+               sed_edit '/^| _(/d' "$STORE/jobs.md"
+               printf '| 2026-07-05 12:00 | srun-500 | verify baseline | configs.md#baseline-v2 | tab:mock | finished | /logs/500.txt |\n' >> "$STORE/jobs.md"
+               ;;
+  C3)          build_config_untested ;;
   C2|C4)       build_config_working ;;
   C5)          build_config_evidence_failed ;;
   C6)          build_config_family_best ;;

@@ -1,52 +1,47 @@
 # worknote-orchestrator
 
-A Claude Code plugin for **worknote-powered parallel job management**. It pairs a shared, machine-facing research memory with a placeholder orchestrator so that a human worknote can be filled by running real jobs across many parallel tabs and agents — with the human interrupted **once** per round, not N times.
+Two skills for filling human-owned worknote placeholders from existing evidence or real jobs, with shared research memory and batched feedback. The instructions support Claude Code and Codex; the existing package is a Claude Code plugin.
 
-## What & why
+- **worknote-orchestrate** coordinates a whole worknote, works one named task interactively, or reports a read-only dashboard. Persistent `<<! ... >>` context blocks apply only to their Markdown scopes. Workers receive only their task's inherited context.
+- **research-memory** stores evidence, configs, job observations, runbooks, blockers, and restartable task records beside the worknote. Its index stays small; action details and queries load from references only when needed.
 
-Research and engineering work is a loop run many times in parallel: submit a long job, watch/fix/rerun, distill the outcome into a **human-owned worknote**. Across many Claude tabs (each in its own git worktree) this breaks down — no shared ground truth, manual distillation, and N scattered human interrupts. This plugin fixes that with a **two-artifact split**:
+## Install and use
 
-- **Worknote** — human-facing, conclusion-only, human-owned. AI contributes only through `<<...>>` placeholders, plus `<<! ... >>` **scoped context blocks**: persistent human input whose reach is bounded by the markdown structure (global → section → subsection), so each agent gets its own chain and nothing from unrelated sections.
-- **Shared memory** — agent-facing, evidence-rich, strictly formatted: configs, runbook, job ledger, blockers. The only cross-session channel.
+For Claude Code:
 
-Two skills:
-
-- **`research-memory`** — lifecycle for the shared store beside a worknote (`init`, `link`, `task-note`, `add-job`, `update-config-status`, `add-learning`, `add-blocker`, `answer-blocker`, `promote-conclusion`, `set-focus`, `show-summary`). All writes go through subagents to keep the main context lean.
-- **`worknote-orchestrate`** — scans the worknote, stamps each placeholder with a stable `#id`, classifies it as *fill-from-data* or *needs-work*, and runs the needs-work ones either as **coordinator-driven parallel agents** (Mode A) or a **human-driven tab** (Mode B — which, on a never-planned worknote, stamps just its own placeholder on claim). State lives in the worknote itself as `<<RUNNING#id ...>>` / `<<BLOCKED#id ...>>` markers, so the worknote is the dashboard. The human may edit/reword/delete placeholders mid-flight — agents tolerate it (memory is ground truth; the worknote write is best-effort). `/worknote-orchestrate <worknote> status` prints a read-only reconciled dashboard. A `<<! ... >>` context block is never a task: it is never stamped, claimed, or replaced, so it persists across rounds until the human deletes it, and a dispatch carries **only** the placeholder's own inherited chain (hiding everything else) — span and chain resolution is done by the read-only `skills/worknote-orchestrate/scripts/wn_scan.py`. Per-task restartable state lives in `tasks/task-<id>.md` so a re-dispatch resumes instead of re-deriving. Layers on `complete-report`.
-
-## Install
-
-```
+```text
 /plugin marketplace add Superjomn/worknote-orchestrator
 /plugin install worknote-orchestrator@worknote-orchestrator
 ```
 
-## Quickstart
+For Codex, place both sibling directories from `skills/` in your configured skill location, keeping each skill's references, templates, and scripts together. Invoke by skill name using the host's supported syntax. No Claude environment variable is required: resource paths resolve from the installed skill directory.
 
-1. **init** — beside your worknote `MyStudy.md`, create the shared store:
-   ```
-   /research-memory init /path/to/MyStudy.md
-   ```
-   This creates `MyStudy.memory/` with `MEMORY.md`, `configs.md`, `runbook.md`, `jobs.md`, `blockers.md`.
+Typical requests (Claude slash-command examples):
 
-2. **link** — in each participating worktree/tab, symlink the store to a fixed path:
-   ```
-   /research-memory link
-   ```
-   Creates `./research-memory -> .../MyStudy.memory/` and registers it in git's `info/exclude` (worktree-safe via `git rev-parse --git-path`, so it works in both a normal repo and a linked worktree).
+```text
+/research-memory init /path/to/MyStudy.md
+/research-memory link
+/worknote-orchestrate /path/to/MyStudy.md
+/worknote-orchestrate /path/to/MyStudy.md #3
+/worknote-orchestrate /path/to/MyStudy.md status
+```
 
-3. **orchestrate** — fill the worknote's placeholders, running jobs where needed:
-   ```
-   /worknote-orchestrate /path/to/MyStudy.md          # whole file (coordinator, Mode A)
-   /worknote-orchestrate /path/to/MyStudy.md #3        # one placeholder (human tab, Mode B)
-   ```
+Init creates `MyStudy.memory/` beside the existing worknote. Link connects a workdir's `./research-memory` to that store and excludes the link through git's local info/exclude. A new, unvalidated recipe normally starts with one interactive canary before parallel execution.
 
-Canary-then-fan-out: bring up one config interactively (Mode B) until it's `working` in `configs.md`, then fan out the rest as parallel Mode A agents.
+## Operating contracts
 
-## Design
+The worknote contains conclusions; memory holds evidence and execution details. IDs are reserved in task records even for fill-from-data tasks and never reused. Active Attempts hold progress; closed Attempts and completed Outcomes are preserved.
 
-The two skills are self-documenting: `worknote-orchestrate` covers the two-artifact split, the orchestrator modes, roles, and the end-to-end flow; `research-memory` covers the shared-memory layer and its three-level hierarchy (L1 index / L2 ledgers / L3 per-task files).
+Before changing a marker, the writer verifies its owner, Attempt, task text, and scoped context. Results are saved before publication. Deleted or changed markers invalidate publication intent; they do not prove the underlying jobs stopped. Terminal ledger entries require evidence. Status and memory queries never repair or mutate data.
 
-## License
+Workers are optional: when permitted and available, independent computation may run in parallel while the coordinator serializes shared writes. Otherwise the same workflow runs serially with bounded reads. Independent tabs need explicit handoff for overlapping writes. Exact edits and read-back checks reduce errors but provide neither distributed locking nor multi-file atomicity.
+
+Existing commands, marker grammar, store layout, and scanner CLI/JSON remain compatible. Existing stores need no migration; legacy Attempts without ownership snapshots require reconciliation before publication. `complete-report` is an optional source of content-formatting guidance.
+
+## Documentation and validation
+
+Start with [worknote-orchestrate](skills/worknote-orchestrate/SKILL.md) or [research-memory](skills/research-memory/SKILL.md). Each entrypoint links the references needed for a selected operation.
+
+Run deterministic scanner checks with `bash tests/wn-scan/run.sh`. See [mock-memory cases](tests/mock-memory/CASES.md) for isolated agent-executed actions followed by file-state assertions. Fixture setup and assertions do not themselves execute the skill. Use a fresh scratch directory for each case.
 
 Author: Chunwei Yan.

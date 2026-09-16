@@ -9,7 +9,7 @@ cross-worknote reference; 0.8.0 `<<! ... >>` scoped context blocks). Each case =
 **LLM-executed** memory action, and a `assert.sh` post-condition.
 
 The memory "actions" are natural-language instructions the agent performs by following
-the dispatch skeleton in `skills/research-memory/SKILL.md`. Only **fixture setup** and
+`skills/research-memory/SKILL.md` and its selected action/query reference. Only **fixture setup** and
 **assertions** are scripted; action execution is agent-driven.
 
 ## Execution mode (IMPORTANT)
@@ -31,7 +31,7 @@ the dispatch skeleton in `skills/research-memory/SKILL.md`. Only **fixture setup
   (`dispatch-2.txt`, `status-output.txt`) land in `$SCRATCH`, **never** in the store.
 - **W1** simulates a read-back failure with `chmod 444` on `MEMORY.md`; restore perms after.
 - **Query cases (Q1–Q5)** run the **read-only** `query` action. The agent follows the
-  "Query dispatch skeleton" in `skills/research-memory/SKILL.md`, then writes the returned
+  query contract in `skills/research-memory/references/queries.md`, then writes the returned
   answer **verbatim** to `$S/answer.txt` (mirrors the `refusal.txt` pattern; lives in `$SCRATCH`,
   **not** the store, so the byte-identical `diff -r` is unaffected) and **touches nothing** in the
   store. `assert.sh` enforces byte-identical stores and greps `answer.txt` for the expected fact,
@@ -110,16 +110,16 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
   a real task file. No file is modified.
 - **Assert:** `bash tests/mock-memory/assert.sh P4 "$S"`
 
-## P5 — set-focus refusal: empty text
+## P5 — set-focus clarification: missing text without clearing intent
 
 - **Fixture:** `fresh`.
 - **Setup:** `bash tests/mock-memory/setup.sh P5 "$S"`
 - **Action:**
 
-  > research-memory `set-focus`, store `$S/research-memory`. Text: (empty). Follow the spec.
+  > research-memory `set-focus`, store `$S/research-memory`. Text: (missing; no clearing instruction and no known completed round). Follow the spec.
   > Write your verbatim (≤3-line) refusal message to `$S/refusal.txt`.
 
-- **Expected:** **REFUSE** — empty focus text. No file is modified.
+- **Expected:** **REQUEST CLARIFICATION** — empty/missing focus text does not establish clearing intent. No file is modified. Capture the short explanation as refusal.txt. Explicit clearing is tested by R2.
 - **Assert:** `bash tests/mock-memory/assert.sh P5 "$S"`
 
 ## C1 — update-config-status untested → working (mirror + hygiene)
@@ -295,7 +295,8 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 
   > research-memory `add-job`, store `$S/research-memory`. Row: timestamp now, job id
   > `srun-800`, purpose "reuse test pmt=32", config ref `configs.md#pmt32`, owner `tab:mock`,
-  > status `submitted`, result ptr `—`. `pmt32` has NO row in `configs.md`; per the spec, add
+  > status `submitted`, result ptr `/receipts/800.txt` (confirmed submission). Workdir:
+  > `/work/mock`; knobs: `pmt=32`. `pmt32` has NO row in `configs.md`; per the spec, add
   > an `untested` configs.md row for `pmt32` in this SAME dispatch, normalizing the ref to its
   > anchor (id `pmt32`) with evidence citing this job (`srun-800`).
 
@@ -342,10 +343,11 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 - **Action:**
 
   > research-memory `add-job`, store `$S/research-memory`. The `srun-900` pool reservation was
-  > scancelled/released. Append its terminal row: timestamp now, job id `srun-900`, purpose "pool
+  > confirmed scancelled in `/receipts/cancel-900.txt` (reason: sweep done). Its unregistered
+  > config `baseline-v2` has workdir `/work/mock`, knobs `nodes=8`; register it if needed. Append its terminal row: timestamp now, job id `srun-900`, purpose "pool
   > reservation (8 nodes)", config ref `configs.md#baseline-v2`, owner `tab:mock`. Per the spec, a
   > released/scancelled pool maps to status **`cancelled`** (NOT `released`) with the release reason
-  > in the result ptr (e.g. "scancelled — sweep done").
+  > in the result ptr (`/receipts/cancel-900.txt — sweep done`).
 
 - **Expected:** done — `jobs.md` gains a `srun-900` row at `cancelled` (release reason in result
   ptr); no `released` status anywhere.
@@ -536,7 +538,7 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 | P2 | duplicate promotion → update in place (no duplicate bullet) |
 | P3 | promote refusal — no evidence pointer |
 | P4 | promote refusal — missing `tasks/task-<id>.md` |
-| P5 | `set-focus` refusal — empty text |
+| P5 | `set-focus` clarification — missing input, no clearing intent |
 | C1 | `untested→working` mirror + configs/Reference template hygiene |
 | C2 | `working→superseded` mirror REPLACE (not duplicate) |
 | C3 | `untested→failed` — no mirror, MEMORY.md untouched |
@@ -555,8 +557,33 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 | X1 | `<<! ... >>` context hiding — a dispatch carries only its own resolved chain |
 | X2 | id-stamping partitions out context blocks (never stamped, never counted) |
 | X3 | `context-drift` detection by `status` (read-only) |
-| Q1 | `query` — reproduce the last job (jobs.md EOF → configs key knobs → runbook §Submit) |
+| Q1 | `query` — reproduce the last job (latest submission → configs key knobs → runbook §Submit) |
 | Q2 | `query` — list all nsys reports (jobs.md ptrs + task Attempts; excludes non-nsys) |
 | Q3 | `query <worknote>` — foreign reference via deduced `<Base>.memory/` (read-only) |
 | Q4 | `query <worknote>` — worknote-markdown fallback when no `.memory/` exists |
 | Q5 | `query` miss — explicit NOT FOUND, no invented specifics |
+
+## Reliability and portability cases (R1–R6)
+
+Use `S=$(mktemp -d)` separately for each case, then the same setup/action/assert loop.
+These fixtures require an empty directory and never execute the action themselves.
+Read the updated skill and selected reference before acting; save captures outside the store.
+
+| Case | Agent request | Observable result |
+|---|---|---|
+| R1 | `answer-blocker 1 "rerun it"`. The latest entry is answered; an older entry is empty. Save response to refusal.txt. | Refuses overwriting the latest answer; entire store unchanged. |
+| R2 | All work is finished. Explicitly clear Current focus with `set-focus`. | Empty section; all other bytes/files unchanged. |
+| R3 | Query baseline throughput and energy per token. Save response to answer.txt. | Cites supported throughput, explicitly identifies missing energy, no writes or invented value. |
+| R4 | Reconcile after the human deleted #1. Owner confirmed inactive; the recorded job j2 is still running. Do not cancel jobs or change focus in this isolated step. Close the dispatch and save live-job handoff to status-output.txt. | Active Attempt closes as cancelled; job history remains running and byte-identical; no completed Outcome. |
+| R5 | Worker from Attempt 1 returns result 999 tok/s at /logs/late.txt. Try to publish its result using the current marker and memory. Save response to result.txt. | New owner's marker/Attempt/Outcome unchanged; late evidence retained in Working notes, no promotion. |
+| R6 | Serial fallback, delegation unavailable: fill the pending throughput placeholder using memory only. | Reserves #5 after archived #4, saves task/Attempt/Outcome, fills conclusion, preserves context block; scanner next_id remains 6. No job submission. |
+
+For coordinator/worker-capable hosts, additionally build the X1 dispatch using absolute
+resource paths and only its inherited chain. Exercise the coordinator write-request /
+confirmation flow in a scratch store if such a channel is available. Do not claim that
+building a prompt tests live delegation. If unavailable, report that limitation and run
+R6 as the serial fallback. No production jobs or external notifications belong in these cases.
+
+An exhaustive query should be checked with more than ten distinct artifact pointers:
+all requested paths must remain in the cited answer. An empty answer to one part of a
+multipart question must not discard evidence for another part (R3).

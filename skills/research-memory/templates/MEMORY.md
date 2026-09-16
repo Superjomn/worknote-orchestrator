@@ -5,7 +5,7 @@
 <!-- Every fact must carry a timestamp and an evidence pointer (job id, log path, dashboard URL). -->
 
 ## Current focus
-_(≤5 forward-looking bullets (in-progress + next); not a changelog)_
+_(0–5 forward-looking bullets; clear when no work remains; not a changelog)_
 
 ## Validated conclusions
 _(facts confirmed by evidence; each bullet ends with a pointer + timestamp)_
