@@ -4,27 +4,53 @@ Use [research-memory actions](../../research-memory/references/actions.md) for e
 
 ## Claims and execution
 
-A pending marker is `<<#N task text>>`. Claim it as `<<RUNNING#N owner=agent job=pending since=<timestamp> task: ...>>` or `owner=tab:<name>` for Mode B. Keep timestamps and owner tokens whitespace-free in marker fields. Blockers use `<<BLOCKED#N owner=... since=... task: ... Q: ... A: ...>>`; no field body may introduce nested angle brackets.
+A pending marker is `<<#N task text>>`. Claim it as `<<RUNNING#N owner=agent:<session> attempt=<uuid> job=pending since=<timestamp> task: ...>>` or `owner=tab:<name>` for Mode B. Keep timestamps and owner tokens whitespace-free in marker fields. New blockers preserve the task verbatim and append metadata on separate lines:
 
-Before claiming, reserve the task record and resolve its context. Append a fresh Attempt containing task text, context, owner, and start timestamp. Record the expected Attempt number in the worker dispatch. Serialize claims and verify the marker before starting work; a failed claim leaves a recoverable Attempt with no submitted job, not permission to proceed.
+```text
+<<BLOCKED#N owner=... attempt=... since=... task: original task text
+Q: single-line question
+A: single-line answer, when available>>
+```
 
-Do not dispatch over a live owner. Takeover requires explicit user selection or an agreed handoff. Invalidate the old dispatch, close its active Attempt with the reason (or record invalidation in Working notes if it is already closed), open a new Attempt, then replace its claim. If no agent is known to be active, reconcile job state before deciding whether to resume monitoring or run new work. A job=pending marker's age alone does not prove its owner dead; without a known submission-time bound or owner state, report uncertainty.
+The last Q: line starts metadata; collapse question/answer whitespace to one line each.
+RUNNING tasks treat Q:/A: as ordinary task text. Legacy inline/multiline BLOCKED markers remain
+readable, but require reconciliation from their task record and a fresh attempt before writes.
+No field body may introduce nested angle brackets.
+
+Before claiming, reserve the task record and resolve its context. Append a fresh Attempt containing exact task text, context, owner, a fresh UUID token, scanner fingerprint, and start timestamp. Record the expected Attempt number and all three guard values in the worker dispatch. Preserve task text when claiming; put execution strategy in notes rather than substituting it for the task. Serialize claims and verify the marker before starting work; a failed claim leaves a recoverable Attempt with no submitted job, not permission to proceed.
+
+Do not dispatch over a live owner. Takeover requires explicit user selection or an agreed handoff. First stop or confirm the old publishing agent and its pending memory writes are idle; if an independent tab cannot be quiesced, record pending takeover and defer redispatch. Invalidate the old dispatch, close its active Attempt with the reason (or record invalidation in Working notes if it is already closed), open a new Attempt, then replace its claim. If no agent is known to be active, reconcile job state before deciding whether to resume monitoring or run new work. A job=pending marker's age alone does not prove its owner dead; without a known submission-time bound or owner state, report uncertainty.
 
 Mode A uses independent workers with one coordinator handling shared edits and feedback. Mode B follows the same records and guards but talks directly to the human. If delegation is unavailable, process tasks serially using the same contracts. For a family of unvalidated jobs, use an interactive canary before fan-out unless the user explicitly chooses otherwise.
 
-Record job receipts before replacing job=pending with a real ID. Each state change gets its own ledger row with evidence. On return, leave each submitted job either verifiably terminal or explicitly handed off with last observed state, monitoring instructions, and next owner/resumer. Do not label a live reservation terminal merely because a round ended.
+Before submission, record intent and a runner correlation token in the Attempt. On restart after uncertain submission, look up that token and recover the existing job ID; if lookup cannot establish the outcome, block instead of submitting again. Record job receipts before replacing job=pending with a real ID. Each state change gets its own ledger row with evidence. On return, leave each submitted job either verifiably terminal or explicitly handed off with last observed state, monitoring instructions, and next owner/resumer. Do not label a live reservation terminal merely because a round ended.
 
 ## Publication guard and completion
 
-Apply this guard to every marker write, including job updates, blockers, and final replacement:
+**Coordinator claim transitions:** initial claims and authorized reconciliation establish a
+new dispatch; they cannot pass an old worker's publication guard. After quiescing the previous
+publisher, rescan the current human intent, reserve/initialize the target task record, and
+replace only the exact freshly read pending/old marker with the new pending ID or owned claim.
+Verify it by read-back before dispatch. On a conflict, rescan rather than overwrite a competing
+claim. Record the old-to-new task/attempt relationship. A failed old guard never authorizes an
+old worker to perform this transition or to refresh its expected values.
 
-1. Rescan the exact ID and reread its task record. Require exactly one marker, the expected owner and latest Attempt number, and matching dispatched task text and canonical context. The Attempt must not have been superseded/cancelled. Pending fill-from-data work follows the same claim/Attempt discipline.
+For writes within an established attempt, apply this guard to every marker write, including
+job updates, blockers, and final replacement:
+
+1. Run the scanner guard with original dispatch values, never values refreshed from the current marker:
+
+   ```text
+   python3 <scanner> <worknote> --memory <store> --id N --expect-attempt TOKEN --expect-owner OWNER --expect-fingerprint HASH
+   ```
+
+   Reread the task record and require the expected latest Attempt number/token as well as unchanged task/context. The Attempt must not have been superseded/cancelled. Pending fill-from-data work follows the same claim/Attempt discipline.
 2. If any check fails, do not change the marker or promote the obsolete result as the current conclusion. Save late evidence in Working notes under its originating Attempt. Do not touch a newer owner's active Attempt or final Outcome.
 3. Read a narrow window and replace the full exact current marker. After a failed edit, reread and repeat all guards once before retrying. Report failure after that; never replace by ID alone or rewrite the whole worknote.
 
-On success, first persist job evidence, reusable learnings, and task results. Recheck the guard before promotion. If a worknote-level conclusion warrants promotion, call promote-conclusion and read back its bullet; retry once on failure. Then fill Outcome once with conclusion and verified promoted value (or explicit failure). Recheck the guard immediately before final replacement. Record publication outcome in Working notes and return computation success separately from publication failure.
+On success, first persist job evidence, reusable learnings, and task results. The shared writer checks the original guard immediately before config verdicts, promotions, blockers, and Outcome writes too. Recheck the guard before promotion. If a worknote-level conclusion warrants promotion, call promote-conclusion and read back its bullet including the task/token/fingerprint; retry once on failure. Then fill Outcome once with conclusion and verified promoted value (or explicit failure). Recheck the guard immediately before final replacement. Record publication outcome in Working notes and return computation success separately from publication failure.
 
-An already completed Outcome may be republished for the same task after the guard succeeds; do not rerun computation or refill Outcome. If task/context changes after Outcome was filled, preserve that completed task, allocate a fresh ID for the revised request, and reserve a new record. This avoids reopening immutable completion history.
+Store its original token/fingerprint with Outcome. An already completed Outcome may be republished for the same task after the guard succeeds and its input fingerprint is validated; do not rerun computation or refill Outcome. If task/context changes after Outcome was filled, preserve that completed task and its Outcome, reserve a fresh ID with wn_allocate.py for the revised request, and reserve a new record. This avoids reopening immutable completion history.
 
 These checks are optimistic, not an atomic compare-and-swap across files. If a concurrent edit is detected after promotion/publication, retain evidence, report the conflict, and reconcile the index with the current writer before continuing. Do not erase another session's edits to simulate rollback.
 
@@ -51,7 +77,7 @@ Status is read-only: no stamping, claiming, repairs, execution workers, or job c
 | orphaned-job | Active/last-recorded-running job without its task marker; cancellation is not inferred |
 | done-but-unwritten | Task Outcome exists but publication failed or marker remains |
 | task-drift / context-drift | Current intent differs from the latest Attempt snapshot |
-| promotion-drift | Outcome claims an index promotion but no matching task pointer exists; also report explicit promotion failure |
+| promotion-drift | Outcome claims an index promotion but no matching task/token/fingerprint exists (legacy pointers need evidence validation); also report explicit promotion failure |
 | liveness-unknown | Job/owner cannot be resolved; do not equate with termination |
 
-Multiple findings can apply to one task. A missing legacy snapshot is uncertainty to reconcile, not a match. Lookup scheduler state read-only when available and authorized; status never appends the observation. Acting on findings happens in an execution invocation.
+A missing legacy token/fingerprint requires reconciliation and a fresh claim before mutation; it is never silently adopted. Multiple findings can apply to one task. A missing legacy snapshot is uncertainty to reconcile, not a match. Lookup scheduler state read-only when available and authorized; status never appends the observation. Acting on findings happens in an execution invocation.

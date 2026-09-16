@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -23,7 +24,7 @@ import sys
 PLACEHOLDER_RE = re.compile(r"<<[^<>]+?>>", re.DOTALL)
 HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*$")
 FENCE_RE = re.compile(r"^ {0,3}(```+|~~~+)")
-HEAD_ID_RE = re.compile(r"^(RUNNING|BLOCKED)?#(\d+)(?![0-9])")
+HEAD_ID_RE = re.compile(r"^(RUNNING|BLOCKED)?#(\d+)(?=\s|$)")
 DIR_RE = re.compile(r"@dir:(\S+)")
 TASK_FILE_RE = re.compile(r"^task-(\d+)\.md$")
 BLOCKER_ID_RE = re.compile(r"BLOCKED#(\d+)")
@@ -40,13 +41,12 @@ def die(msg: str) -> None:
 def parse_directives(text: str) -> dict:
     """Extract the hint directives that may sit in a placeholder or a context block."""
     d = {}
-    m = DIR_RE.search(text)
-    if m:
+    for m in DIR_RE.finditer(text):
         d["dir"] = m.group(1)
-    if re.search(r"@memory\b", text):
-        d["memory"] = True
-    if re.search(r"@run\b", text):
-        d["run"] = True
+    for m in re.finditer(r"@(memory|run)\b", text):
+        mode = m.group(1)
+        d.pop("run" if mode == "memory" else "memory", None)
+        d[mode] = True
     return d
 
 
@@ -65,15 +65,11 @@ def parse_marker(body: str) -> dict:
     """Parse a placeholder body into state / id / owner / job / since / task / Q / A."""
     body = body.strip()
     state = "pending"
-    if body.startswith("RUNNING"):
-        state = "RUNNING"
-    elif body.startswith("BLOCKED"):
-        state = "BLOCKED"
-
     pid = None
     m = HEAD_ID_RE.match(body)
     if m:
         pid = int(m.group(2))
+        state = m.group(1) or "pending"
 
     if state == "pending":
         # A pending placeholder has no marker fields: its whole body (minus the stamped
@@ -82,6 +78,7 @@ def parse_marker(body: str) -> dict:
             "state": state,
             "id": pid,
             "owner": None,
+            "attempt": None,
             "job": None,
             "since": None,
             "task": (body[m.end():] if m else body).strip(),
@@ -92,16 +89,34 @@ def parse_marker(body: str) -> dict:
     # Fields live before `task:`; the free-text fields follow it.
     head, sep, tail = body.partition("task:")
     fields = {}
-    for key in ("owner", "job", "since"):
+    for key in ("owner", "attempt", "job", "since"):
         fm = re.search(rf"\b{key}=(\S+)", head)
         if fm:
             fields[key] = fm.group(1)
 
     task = q = a = None
-    if sep:
+    blocker_format = None
+    if sep and state == "RUNNING":
+        # Q:/A: are ordinary task text unless the marker is BLOCKED.
+        task = tail.strip()
+    elif sep:
         rest = tail
-        qm = re.search(r"\bQ:", rest)
-        if qm:
+        # New claims append single-line Q/A fields on separate lines. The last
+        # Q line is metadata, preserving any literal Q: lines inside the task.
+        task_part, qsep, qa = rest.rpartition("\nQ:")
+        if qsep and fields.get("attempt"):
+            blocker_format = "lines"
+            task = task_part.strip()
+            question_part, asep, answer_part = qa.partition("\nA:")
+            if "\n" in question_part.strip() or (asep and "\n" in answer_part.strip()):
+                # Old multiline metadata stays inspectable. Only guarded writes
+                # require the unambiguous, single-line metadata encoding.
+                blocker_format = "legacy"
+            q = question_part.strip()
+            a = answer_part.strip() if asep else None
+        elif (qm := re.search(r"\bQ:", rest)):
+            # Legacy inline markers remain readable, but cannot pass a write guard.
+            blocker_format = "legacy"
             task = rest[: qm.start()].strip()
             rest = rest[qm.end():]
             am = re.search(r"\bA:", rest)
@@ -117,11 +132,13 @@ def parse_marker(body: str) -> dict:
         "state": state,
         "id": pid,
         "owner": fields.get("owner"),
+        "attempt": fields.get("attempt"),
         "job": fields.get("job"),
         "since": fields.get("since"),
         "task": task,
         "question": q,
         "answer": a,
+        "blocker_format": blocker_format,
     }
 
 
@@ -142,10 +159,13 @@ def headings(lines: list[str], masked: set[int] | None = None) -> list[tuple[int
             continue
         fm = FENCE_RE.match(ln)
         if fm:
-            marker = fm.group(1)[:3]
+            marker = fm.group(1)
             if fence is None:
-                fence = marker
-            elif marker == fence:
+                # Backtick info strings cannot themselves contain a backtick.
+                if marker[0] != "`" or "`" not in ln[fm.end():]:
+                    fence = marker
+            elif (marker[0] == fence[0] and len(marker) >= len(fence)
+                  and not ln[fm.end():].strip()):
                 fence = None
             continue
         if fence is not None:
@@ -244,6 +264,28 @@ def same_chain(recorded: str, resolved: str) -> bool:
     return norm(recorded) == norm(resolved)
 
 
+def task_fingerprint(task: str | None, chain: list[dict], directives: dict) -> str:
+    """Execution inputs only: moves and job updates do not invalidate an attempt.
+
+    Keep block boundaries and exact task/context text, unlike the display-only ` | `
+    serialization. A changed command's whitespace can be significant.
+    """
+    payload = [task, [c["text"] for c in chain], directives]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True,
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def verify_attempt(p: dict, attempt: str, owner: str, fingerprint: str) -> None:
+    """Fail closed for legacy markers, takeover, cancellation, or changed intent."""
+    if (p["state"] not in ("RUNNING", "BLOCKED") or not p["attempt"]
+            or p["attempt"] != attempt or p["owner"] != owner):
+        raise ValueError("attempt ownership changed; retain results in the old attempt only")
+    if p["fingerprint"] != fingerprint:
+        raise ValueError("task/context changed; retain results in the old attempt only")
+    if p["state"] == "BLOCKED" and p["blocker_format"] != "lines":
+        raise ValueError("legacy BLOCKED encoding requires reconciliation before publication")
+
+
 def scan(path: str, memdir: str | None) -> dict:
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -311,14 +353,16 @@ def scan(path: str, memdir: str | None) -> dict:
             "line": line,
             "state": info["state"],
             "owner": info["owner"],
+            "attempt": info["attempt"],
             "job": info["job"],
             "since": info["since"],
             "task": info["task"],
             "question": info["question"],
             "answer": info["answer"],
+            "blocker_format": info.get("blocker_format"),
             "body": body.strip(),
             "section": enc[2] if enc else None,
-            "own_directives": parse_directives(body),
+            "own_directives": parse_directives(info["task"] or ""),
         })
 
     # Chains: every context block whose span contains the placeholder's line,
@@ -336,6 +380,7 @@ def scan(path: str, memdir: str | None) -> dict:
         ]
         p["directives"] = merged
         p["effective_dir"] = merged.get("dir")
+        p["fingerprint"] = task_fingerprint(p["task"], p["context_chain"], merged)
         p["context_drift"] = None
         # Drift only means something for a CLAIMED marker: a stale task file left by a
         # finished round must not make an unclaimed placeholder report drift.
@@ -370,8 +415,8 @@ def scan(path: str, memdir: str | None) -> dict:
         ],
         "placeholders": [
             {k: p[k] for k in (
-                "id", "line", "state", "owner", "job", "since", "task", "question",
-                "answer", "body", "section", "context_chain", "effective_dir",
+                "id", "line", "state", "owner", "attempt", "fingerprint", "job", "since", "task", "question",
+                "answer", "blocker_format", "body", "section", "context_chain", "effective_dir",
                 "directives", "context_drift")}
             for p in placeholders
         ],
@@ -405,6 +450,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--memory", default=None, help="research-memory store dir")
     ap.add_argument("--id", type=int, default=None, help="emit only this placeholder")
     ap.add_argument("--format", choices=("json", "table"), default="json")
+    ap.add_argument("--expect-attempt", help="guard a write using the dispatch attempt token")
+    ap.add_argument("--expect-owner", help="guard a write using the dispatch owner")
+    ap.add_argument("--expect-fingerprint", help="guard a write using the dispatch input hash")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:  # --help exits 0; a usage error exits 2
@@ -414,6 +462,9 @@ def main(argv: list[str]) -> int:
         die(f"no such worknote: {args.worknote}")
     if args.memory and not os.path.isdir(args.memory):
         die(f"no such memory dir: {args.memory}")
+    guards = (args.expect_attempt, args.expect_owner, args.expect_fingerprint)
+    if any(v is not None for v in guards) and (not all(guards) or args.id is None):
+        die("write guard requires --id and all three --expect-* arguments")
 
     result = scan(args.worknote, args.memory)
 
@@ -425,6 +476,8 @@ def main(argv: list[str]) -> int:
             # A stamped id must resolve to exactly one placeholder — never guess which.
             die(f"id #{args.id} is stamped on {len(match)} placeholders "
                 f"(lines {', '.join(str(p['line']) for p in match)}) — ids must be unique")
+        if all(guards):
+            verify_attempt(match[0], *guards)
         if args.format == "table":
             print(render_table({"placeholders": match}))
         else:

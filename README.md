@@ -45,3 +45,14 @@ Start with [worknote-orchestrate](skills/worknote-orchestrate/SKILL.md) or [rese
 Run deterministic scanner checks with `bash tests/wn-scan/run.sh`. See [mock-memory cases](tests/mock-memory/CASES.md) for isolated agent-executed actions followed by file-state assertions. Fixture setup and assertions do not themselves execute the skill. Use a fresh scratch directory for each case.
 
 Author: Chunwei Yan.
+
+## Lifecycle helper checks
+
+```bash
+python3 -B -m unittest discover -s tests/lifecycle -v
+```
+
+These regressions cover durable concurrent ID allocation, stale-attempt guards, task/context
+changes, and scanner edge cases. See `tests/lifecycle/CASES.md` for agent-executed scenarios.
+`wn_scan.py next_id` is a read-only preview; reserve every new ID with `wn_allocate.py`.
+Legacy markers remain readable but must be reconciled into a fresh owned attempt before writes.

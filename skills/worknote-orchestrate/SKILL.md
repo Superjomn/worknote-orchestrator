@@ -3,7 +3,7 @@ name: worknote-orchestrate
 description: Fill actionable worknote placeholders from existing evidence or coordinated jobs, using scoped persistent context and shared research memory. Use for worknote orchestration, a named placeholder, or its status dashboard; not for general report editing without worknote tasks.
 metadata:
   author: Chunwei Yan
-  version: 0.8.0
+  version: 0.9.0
 ---
 
 # Worknote orchestration
@@ -22,16 +22,16 @@ For a dispatched worker read [Worker dispatch](references/worker-dispatch.md); p
 
 ## Essential workflow
 
-1. Resolve the worknote, sibling memory store, and authorized workdirs. Use the read-only scanner at `scripts/wn_scan.py` relative to this skill. Always pass the known memory store for ID allocation and context-drift checks.
+1. Resolve the worknote, sibling memory store, and authorized workdirs. Use the read-only scanner at `scripts/wn_scan.py` relative to this skill. Always pass the known memory store for ID previews and context-drift checks; allocate with `scripts/wn_allocate.py`.
 2. Classify each task as fill-from-data or needs-work. An inherited or local `@memory` forbids jobs. Prefer interactive canary work for unvalidated configs; validated recipes may support independent parallel tasks. Config success alone does not authorize resource use or prove every sweep point safe.
 3. Present unresolved choices and the intended work. Reuse approval already given; do not force another plan-mode round. Respect the host's current planning/execution mode and permissions.
-4. Reserve IDs in task records, claim authorized targets, and execute under the [lifecycle](references/lifecycle.md). Fill-from-data tasks also get records and publication checks. Batch worker blockers through the coordinator; workers record and return rather than independently interrupting the human.
-5. Save evidence/results before publication, verify ownership and unchanged intent, then replace only the exact current marker. Preserve results if the worknote changed. Refresh Current focus, including clearing it when the round finishes.
+4. Reserve IDs with the allocator, claim authorized targets with unique attempt tokens, and execute under the [lifecycle](references/lifecycle.md). Fill-from-data tasks also get records and publication checks. Batch worker blockers through the coordinator; workers record and return rather than independently interrupting the human.
+5. Save evidence/results before publication, verify original owner/token/fingerprint and unchanged intent, then replace only the exact current marker. Preserve results if the worknote changed. Refresh Current focus, including clearing it when the round finishes.
 
 ## Boundaries and portability
 
 - Conclusions belong in the worknote; commands, intermediate data, job receipts, and evidence belong in memory. Match surrounding language and structure. If available and relevant, complete-report may supply content/figure/math guidance, but is not required and does not control execution or add approval gates.
 - Resolve resources from the installed skill directory and pass absolute paths. Do not require `CLAUDE_PLUGIN_ROOT` or literal tool names. Use the host's search/read, exact-edit, delegation, and user-input capabilities.
 - Prefer permitted workers for independent work. If delegation is unavailable, execute serially with bounded reads and report the changed scheduling. Do not create user-owned tasks or send external notifications as a substitute.
-- Serialize marker/ID allocation and shared-memory edits within the coordinator. Route worker writes through that writer. Independent tabs require explicit handoff before overlapping writes; no locking helper is included, so reread/read-back checks cannot guarantee race-free cross-session writes.
+- Serialize marker/ID allocation and shared-memory edits within the coordinator. Route worker writes through that writer. Independent tabs require explicit handoff before overlapping writes; exclusive task-file creation prevents allocation collisions, but read guards do not lock publication across sessions. Quiesce the old publisher and its pending memory writes before takeover; otherwise defer it.
 - A missing marker cancels publication intent, not the underlying job. Never fabricate a terminal ledger state. A status call makes no writes and starts no execution workers.
