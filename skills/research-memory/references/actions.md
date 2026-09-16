@@ -18,11 +18,13 @@ Require an identified store and a git worktree. Create `./research-memory` point
 
 ### task-note <id> <text>
 
-Require a positive ID and a specified update. Create `tasks/task-<id>.md` from [task.md](../templates/task.md) on reservation or first claim, filling the Brief with task, workdir, worknote, canonical context, and blocker references. An ID-only reservation may leave Attempts and Outcome empty; do not fabricate an executed Attempt from the template example.
+Require a positive ID and a specified update. Initialize `tasks/task-<id>.md` reserved by `wn_allocate.py`, or create it from [task.md](../templates/task.md) for a pre-existing human-stamped ID, filling the Brief with task, workdir, worknote, canonical context, and blocker references. An ID-only reservation may leave Attempts and Outcome empty; do not fabricate an executed Attempt from the template example.
 
-On dispatch, append Attempt N+1 with the approved task text, owner, timestamp, and canonical context. Context is whitespace-collapsed block texts joined with ` | `, outermost to innermost, or `none`. The owner may update its active Attempt's tried/jobs/outcome/next-step fields until it closes; its task and context snapshot remain fixed. Closed Attempts are immutable. A restart appends a new Attempt; it never replaces prior history. Legacy Attempts without owner/task snapshots are not proof that an old worker still owns the task: reconcile before publishing.
+On dispatch, append Attempt N+1 with the exact approved task text, owner, unique token, scanner fingerprint, timestamp, and canonical context. Context is whitespace-collapsed block texts joined with ` | `, outermost to innermost, or `none`. The owner may update its active Attempt's tried/jobs/outcome/next-step fields until it closes; its task and context snapshot remain fixed. Closed Attempts are immutable. A restart appends a new Attempt; it never replaces prior history. Legacy Attempts without owner/task snapshots are not proof that an old worker still owns the task: reconcile before publishing.
 
-Working notes are mutable scratch. Late results from an obsolete dispatch go there with the old Attempt number and evidence; never rewrite a closed Attempt or newer owner's state. Fill the final Outcome once, only for the current task's verified completion, after promotion read-back when applicable. Use `promoted: none` when no promotion is needed, or `FAILED (<reason>)` on failed verification. Record subsequent publication success/failure in Working notes so a failed worknote edit does not require rewriting Outcome. Completed Outcomes are not reopened: changed intent after completion gets a fresh ID.
+For an orchestrated verdict, promotion, blocker, or Outcome, the shared writer must run the original owner/token/fingerprint guard immediately before the edit. A failed guard permits only truthful job observations and old-attempt evidence.
+
+Working notes are mutable scratch. Late results from an obsolete dispatch go there with the old Attempt number and evidence; never rewrite a closed Attempt or newer owner's state. Record its originating token and input fingerprint. Fill the final Outcome once, only for the current task's verified completion, after promotion read-back when applicable. Use `promoted: none` when no promotion is needed, or `FAILED (<reason>)` on failed verification. Record subsequent publication success/failure in Working notes so a failed worknote edit does not require rewriting Outcome. Completed Outcomes are not reopened: changed intent after completion gets a fresh ID.
 
 Verify the intended Brief/Attempt/notes/Outcome change and that closed Attempts and prior final Outcome remain unchanged.
 
@@ -30,7 +32,7 @@ Verify the intended Brief/Attempt/notes/Outcome change and that closed Attempts 
 
 Require all columns: timestamp, job id, purpose, config ref, owner, status, result pointer. Cite submission receipts, scheduler observations, logs, or equivalent evidence; a terminal claim needs evidence for that state. Status is one of `submitted`, `running`, `finished`, `failed`, `cancelled`. `unknown` is a query result, not a stored status; a confirmed released/scancelled reservation is `cancelled`, with the release reason in the result pointer.
 
-Append one row per observed state change for that job ID. Never fold one job's terminal state into another job's row. Deleting a worknote marker or superseding an Attempt is not evidence of cancellation. For an unregistered config reference, first add an `untested` configs row using the reference anchor as ID, supplied workdir/knobs, and the job receipt as evidence. Refuse if required config fields cannot be established. Then append the job row; report a partial config-only write if the second edit fails.
+For orchestrated jobs include task ID and attempt token in the purpose field on every row. Append one row per observed state change for that job ID. Never fold one job's terminal state into another job's row. Deleting a worknote marker or superseding an Attempt is not evidence of cancellation. For an unregistered config reference, first add an `untested` configs row using the reference anchor as ID, supplied workdir/knobs, and the job receipt as evidence. Refuse if required config fields cannot be established. Then append the job row; report a partial config-only write if the second edit fails.
 
 Verify one new row, unchanged prior real rows, valid status, and a resolvable config reference. The latest row per job is its last recorded observation, not a guarantee that the scheduler still agrees.
 
@@ -66,7 +68,7 @@ Require a nonempty answer and a matching entry. Target only the latest matching 
 
 Require an existing task file and evidence-backed conclusion. Add one Validated conclusions bullet ending with an evidence pointer, timestamp, and `→ tasks/task-<id>.md`; update an existing bullet for that task instead of duplicating it. Remove example bullets on first use. If needed, compress older text while retaining evidence and task pointers to stay within 150 lines; report a capacity blocker if that cannot be done without losing meaning.
 
-Read back the bullet under Validated conclusions and verify its content and pointer. The caller may retry an unsuccessful promotion/read-back once, then records failure explicitly. Do not claim promotion merely because an edit was attempted.
+For orchestrated promotion include the original attempt token and fingerprint in the bullet. Read back the bullet under Validated conclusions and verify its content, pointer, and those values. The caller may retry an unsuccessful promotion/read-back once, then records failure explicitly. Do not claim promotion merely because an edit was attempted.
 
 ### set-focus <text>
 

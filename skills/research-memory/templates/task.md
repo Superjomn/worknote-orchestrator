@@ -18,7 +18,10 @@
 
 ### Attempt 1 — <YYYY-MM-DD HH:MM>
 - task: <approved task text for this dispatch>
-- owner: <agent or tab:name>
+- owner: <agent:session or tab:name>
+- token: <unique attempt token from claimed marker>
+- fingerprint: <scanner input fingerprint captured at dispatch>
+- submission: <intent and runner correlation token recorded before submission, or none>
 - context: <chain resolved for this dispatch, same ` | ` form (or `none`) — what `context-drift` compares against>
 - tried: <what was attempted>
 - jobs: <job ids submitted this attempt, or none>
@@ -30,5 +33,7 @@
 
 ## Outcome
 <!-- Filled ONCE for current-task completion after promotion read-back, before publication. -->
+- token: <originating attempt token>
+- fingerprint: <validated input fingerprint>
 - conclusion: <final result — conclusions only>
 - promoted: <what flowed up and where: configs.md#<id> / runbook §<section> / MEMORY.md bullet / none / FAILED (reason)>

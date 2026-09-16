@@ -3,7 +3,7 @@ name: research-memory
 description: Maintain or query evidence-backed shared memory beside a human worknote, including job histories, configurations, runbooks, blockers, and task records. Use for research-memory actions or explicit references to another worknote's memory; not for general note-taking or unrelated artifact searches.
 metadata:
   author: Chunwei Yan
-  version: 0.8.0
+  version: 0.9.0
 ---
 
 # Research memory
@@ -31,7 +31,7 @@ Read only the indicated reference, then the target action's section.
 | `promote-conclusion`, `set-focus` | [Action contracts](references/actions.md#curated-index) |
 | `query [<worknote>] <question>`, `show-summary` | [Queries](references/queries.md) |
 
-Templates in [templates/](templates/) define the file shapes; create task files lazily. Existing stores need no migration. Resolve an explicitly named store first, otherwise the local symlink; for init derive the sibling store from the worknote. If `link` has no uniquely identified target, ask for it. Do not guess among projects.
+Templates in [templates/](templates/) define the file shapes; reserve new task IDs with the companion allocator before stamping, including fill-from-data tasks. Existing records remain readable; reconcile legacy claims into a fresh token before publication. Resolve an explicitly named store first, otherwise the local symlink; for init derive the sibling store from the worknote. If `link` has no uniquely identified target, ask for it. Do not guess among projects.
 
 ## Execution and dispatch
 
