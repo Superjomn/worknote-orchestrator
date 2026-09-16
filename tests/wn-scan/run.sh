@@ -204,7 +204,7 @@ eq "#1 drifts (Attempt records OLD-CTX-FFF)" "True" \
 eq "#2 does not drift (Attempt matches)" "False" \
   "$(jget "$S/out4.json" '[p["context_drift"] for p in d["placeholders"] if p["id"]==2][0]')"
 
-echo "--- 7b: an empty chain recorded as `none` does not drift"
+echo '--- 7b: an empty chain recorded as `none` does not drift'
 WN5="$S/wn5.md"
 printf '# NoCtx\n\n<<RUNNING#1 owner=agent job=srun-4 since=2026-07-02 task: no context here>>\n' > "$WN5"
 MEM5="$S/mem5"; mkdir -p "$MEM5/tasks"

@@ -3,11 +3,11 @@
 
     python3 wn_scan.py <worknote> [--memory <dir>] [--id N] [--format json|table]
 
-Implements exactly the mechanical rules of skills/worknote-orchestrate/SKILL.md:
+Implements the mechanical rules of ../references/context-scanning.md:
 scan-then-partition, marker parsing, context-block spans, ordered inheritance chains,
 directive merging, `next_id` over three sources, and `context-drift`.
 
-NEVER WRITES. Every worknote mutation stays Edit-based per the locate-by-id discipline.
+NEVER WRITES. Worknote mutations use exact edits with lifecycle ownership/intent guards.
 Exit 0 on success, 2 on usage/parse error.
 """
 

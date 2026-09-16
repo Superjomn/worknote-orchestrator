@@ -10,6 +10,10 @@ set -uo pipefail
 CASE="${1:?usage: assert.sh <case-id> <scratch-dir>}"
 SCRATCH="${2:?usage: assert.sh <case-id> <scratch-dir>}"
 
+case "$CASE" in
+  R[1-6]) exec python3 "$(dirname "${BASH_SOURCE[0]}")/reliability.py" assert "$CASE" "$SCRATCH" ;;
+esac
+
 STORE="$SCRATCH/research-memory"
 ORIG="$SCRATCH/research-memory.orig"
 MEM="$STORE/MEMORY.md"
