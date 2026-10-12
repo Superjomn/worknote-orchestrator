@@ -1,11 +1,11 @@
 # worknote-orchestrator
 
-Two skills for filling human-owned worknote placeholders from existing evidence or real jobs, with shared research memory and batched feedback. The instructions support Claude Code and Codex; the existing package is a Claude Code plugin.
+Two skills for filling human-owned worknote placeholders from existing evidence or real jobs, with shared research memory and batched feedback. The instructions support Claude Code and Codex; the plugin packages the same skills for both hosts.
 
 - **worknote-orchestrate** coordinates a whole worknote, works one named task interactively, or reports a read-only dashboard. Persistent `<<! ... >>` context blocks apply only to their Markdown scopes. Workers receive only their task's inherited context.
 - **research-memory** stores evidence, configs, job observations, runbooks, blockers, and restartable task records beside the worknote. Its index stays small; action details and queries load from references only when needed.
 
-## Quickstart
+## Claude Code quickstart
 
 Treat AI as a research intern: write the assignment once, let it run multi-turn
 experiments, and come back to an evidence-backed report. This worknote asks which
@@ -141,7 +141,80 @@ For Claude Code:
 /plugin install worknote-orchestrator@worknote-orchestrator
 ```
 
-For Codex, place both sibling directories from `skills/` in your configured skill location, keeping each skill's references, templates, and scripts together. Invoke by skill name using the host's supported syntax. No Claude environment variable is required: resource paths resolve from the installed skill directory.
+### Codex CLI install
+
+Requires Bash and Python 3.10+. For standalone skills, run from this checkout:
+
+```bash
+bash scripts/install-codex-skills.sh
+# Alternatives: a project-local skills directory, or copies instead of links
+bash scripts/install-codex-skills.sh --target /path/to/project/.agents/skills
+bash scripts/install-codex-skills.sh --copy --target /path/to/skills
+```
+
+The default target is `$HOME/.agents/skills`; `CODEX_SKILLS_DIR` overrides it and
+`--target` takes precedence. Both sibling skills and all resources stay together.
+Matching symlinks or identical copies are preserved on repeated installs. Conflicting
+files, directories, or links cause refusal before either skill is installed. Copies
+are snapshots: when the source changes, choose a fresh target or explicitly remove
+your old copies after checking for local edits. Symlinks follow checkout updates;
+keep the checkout in place. Use `/skills` in Codex to browse; restart if a change
+is not picked up. Choose either standalone skills or the plugin to avoid duplicates.
+
+For the plugin marketplace route, run from the checkout:
+
+```bash
+codex plugin marketplace add "$PWD"   # or: codex plugin marketplace add Superjomn/worknote-orchestrator
+codex plugin add worknote-orchestrator@worknote-orchestrator
+codex plugin list
+```
+
+The repo catalog `.agents/plugins/marketplace.json` uses a `./` source that resolves from the repository root. The
+`.codex-plugin/plugin.json` compatibility manifest points to `./skills/` and uses
+version `0.9.0`, matching Claude. This layout was verified with Codex CLI 0.162.1
+using a temporary config/cache. Plugin skills are namespaced (Codex 0.162.1 lists them as
+`worknote-orchestrator:research-memory` and `worknote-orchestrator:worknote-orchestrate`);
+use the entry shown by `/skills`. No Claude environment
+variable is needed. See the official [skill documentation](https://developers.openai.com/codex/skills)
+and [plugin packaging documentation](https://developers.openai.com/codex/plugins/build).
+
+### Codex quickstart
+
+Use an installed, authenticated Codex CLI with the same Git, Bash, Python, GPU,
+model access, and backend dependencies described in the Claude Code quickstart.
+Clone the repository and create `inference-study` as above. Save the **same
+`my-research-task.md` example above**, including its resource budget and scoped
+context blocks. With the standalone skills installed, start from that research
+directory:
+
+```bash
+codex
+```
+
+Send these requests **one at a time**, waiting for each to finish:
+
+```text
+$research-memory init my-research-task.md
+$worknote-orchestrate my-research-task.md
+$worknote-orchestrate my-research-task.md status
+```
+
+Alternatively, run each request sequentially from the shell. Single quotes keep
+`$` literal so the shell does not expand the skill name:
+
+```bash
+codex exec '$research-memory init my-research-task.md'
+codex exec '$worknote-orchestrate my-research-task.md'
+codex exec '$worknote-orchestrate my-research-task.md status'
+```
+
+For plugin installs, select the namespaced skills in `/skills` and substitute those
+names for the standalone names above. Init creates `my-research-task.memory/`;
+orchestration saves evidence there and fills completed placeholders in the worknote.
+Keep the session or `codex exec` process running for the experiment. Execution is
+subject to the session's permissions; missing resources or choices may require
+interactive input. The final `status` request is read-only. The fictional filled
+excerpt in the Claude quickstart illustrates the same expected report format.
 
 Typical requests (Claude plugin slash-command examples):
 
@@ -183,3 +256,13 @@ These regressions cover durable concurrent ID allocation, stale-attempt guards, 
 changes, and scanner edge cases. See `tests/lifecycle/CASES.md` for agent-executed scenarios.
 `wn_scan.py next_id` is a read-only preview; reserve every new ID with `wn_allocate.py`.
 Legacy markers remain readable but must be reconciled into a fresh owned attempt before writes.
+
+## Codex packaging checks
+
+```bash
+python3 -B -m unittest discover -s tests/codex -v
+```
+
+These offline stdlib checks validate both hosts' manifests, the repo marketplace
+catalog (`.agents/plugins/marketplace.json`), skill frontmatter, and installer behavior in temporary directories. They
+require neither a Codex binary nor network access and never install to your home.

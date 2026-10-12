@@ -14,9 +14,11 @@ Turn human-owned `<<...>>` placeholders into conclusions, keeping evidence and r
 
 | Invocation | Behavior | Read next |
 |---|---|---|
-| `/worknote-orchestrate <worknote>` | Coordinate approved tasks; parallelize independent jobs when permitted | [Context and scanning](references/context-scanning.md), then [Lifecycle](references/lifecycle.md) |
-| `/worknote-orchestrate <worknote> #<id>` | Work one task interactively (Mode B) | [Lifecycle](references/lifecycle.md); consult scanning rules for context/ID resolution |
-| `/worknote-orchestrate <worknote> status` | Reconcile a read-only dashboard | [Status](references/lifecycle.md#status) |
+| `worknote-orchestrate <worknote>` | Coordinate approved tasks; parallelize independent jobs when permitted | [Context and scanning](references/context-scanning.md), then [Lifecycle](references/lifecycle.md) |
+| `worknote-orchestrate <worknote> #<id>` | Work one task interactively (Mode B) | [Lifecycle](references/lifecycle.md); consult scanning rules for context/ID resolution |
+| `worknote-orchestrate <worknote> status` | Reconcile a read-only dashboard | [Status](references/lifecycle.md#status) |
+
+Use the host's invocation syntax: `/worknote-orchestrator:worknote-orchestrate` in Claude Code, `$worknote-orchestrate` for a standalone Codex skill, or the plugin-qualified name shown by Codex `/skills` for a plugin install. The arguments and workflows are the same.
 
 For a dispatched worker read [Worker dispatch](references/worker-dispatch.md); pass only the selected placeholder's context chain and relevant memory action instructions. Do not load every reference or the whole worknote into every worker.
 
