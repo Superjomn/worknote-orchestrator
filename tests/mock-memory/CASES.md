@@ -29,7 +29,8 @@ The memory "actions" are natural-language instructions the agent performs by fol
 - **Context cases (X1–X3)** exercise `<<! ... >>` scoped context blocks. Use
   `skills/worknote-orchestrate/scripts/wn_scan.py` (read-only) to resolve spans/chains. Captures
   (`dispatch-2.txt`, `status-output.txt`) land in `$SCRATCH`, **never** in the store.
-- **W1** simulates a read-back failure with `chmod 444` on `MEMORY.md`; restore perms after.
+- **W1** injects a failed promotion write/read-back; file permissions alone are not a
+  reliable failure mechanism for privileged processes or replacement-based editors.
 - **Query cases (Q1–Q5)** run the **read-only** `query` action. The agent follows the
   query contract in `skills/research-memory/references/queries.md`, then writes the returned
   answer **verbatim** to `$S/answer.txt` (mirrors the `refusal.txt` pattern; lives in `$SCRATCH`,
@@ -205,14 +206,14 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 ## L1 — promote under the 150-line cap (curation)
 
 - **Fixture:** `near-cap` — MEMORY.md is exactly 150 lines of synthetic promoted bullets;
-  `tasks/task-90.md` exists.
+  `tasks/task-190.md` exists, with no existing conclusion for that ID.
 - **Setup:** `bash tests/mock-memory/setup.sh L1 "$S"`
 - **Action:**
 
-  > research-memory `promote-conclusion`, id `90`, store `$S/research-memory`. Text:
+  > research-memory `promote-conclusion`, id `190`, store `$S/research-memory`. Text:
   > "final: pipeline reaches 2.1x speedup — job srun-990, /logs/990.txt". MEMORY.md is at
   > the 150-line cap: to stay ≤150 you MUST curate/compress the OLDEST bullets, but NEVER
-  > drop any `→ tasks/task-*.md` pointer. End with timestamp + `→ tasks/task-90.md`.
+  > drop any `→ tasks/task-*.md` pointer. End with timestamp + `→ tasks/task-190.md`.
 
 - **Expected:** done — MEMORY.md ≤150 lines; new bullet present; every prior pointer kept.
 - **Assert:** `bash tests/mock-memory/assert.sh L1 "$S"`
@@ -237,19 +238,21 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 
 ## W1 — read-back failure → `promoted: FAILED`
 
-- **Fixture:** `worknote` — fresh store + `tasks/task-1.md` + `Scratch.md` with a
-  `<<RUNNING#1 ...>>` marker.
+- **Fixture:** `worknote` — fresh store + `tasks/task-1.md` with an owned Attempt and
+  empty Outcome + `Scratch.md` with the matching token and fingerprint inputs.
 - **Setup:** `bash tests/mock-memory/setup.sh W1 "$S"`
 - **Action** (Mode B completion with a forced read-back failure):
 
-  1. `chmod 444 "$S/research-memory/MEMORY.md"` (simulate an un-writable MEMORY.md).
-  2. research-memory `promote-conclusion`, id `1`, text "tp=8 wins — job srun-901,
-     /logs/901.txt". The Edit to MEMORY.md will fail (read-only).
-  3. Per the Mode B read-back protocol: bounded-grep MEMORY.md for `tasks/task-1.md` under
-     "Validated conclusions". The read-back FAILS. Retry `promote-conclusion` once; it fails
-     again. Then write `promoted: FAILED (MEMORY.md read-only)` into the `## Outcome` section
-     of `tasks/task-1.md` (fill the Outcome exactly once) so the drift stays visible.
-  4. `chmod 644 "$S/research-memory/MEMORY.md"` to restore perms.
+  1. Capture the original owner/token/fingerprint from the fixture's Attempt and verify
+     the scanner guard. In this isolated test, inject this failure: both promotion edits
+     return `write failed (injected)` without changing MEMORY.md. Do not attempt a real
+     write or use chmod as a substitute for the injected failure.
+  2. Attempt research-memory `promote-conclusion`, id `1`, text "tp=8 wins — job srun-901,
+     /logs/901.txt" under that injection. Read back Validated conclusions: no task-1 bullet
+     exists. Retry once with the same injected failure and verify absence again.
+  3. Recheck the original guard and fill Outcome once with its token/fingerprint,
+     evidence-backed conclusion, and `promoted: FAILED (injected write failure)`.
+     Leave the worknote unchanged in this isolated completion-record step.
 
 - **Expected:** `tasks/task-1.md` Outcome has a single `promoted: FAILED ...` line.
 - **Assert:** `bash tests/mock-memory/assert.sh W1 "$S"`
@@ -411,15 +414,16 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 - **Fixture:** `worknote-context-unstamped` — un-stamped `<<...>>` placeholders interleaved with
   `<<! ... >>` context blocks.
 - **Setup:** `bash tests/mock-memory/setup.sh X2 "$S"`
-- **Action** (planning-scan id-stamping step):
+- **Action** (authorized reservation and stamping, without execution):
 
-  > Run the planning scan's id-stamping step on `$S/Scratch.md`: scan for `<<[^<>]+?>>`, partition
-  > out every match whose body starts with `!` (context blocks — never stamped, never counted), and
-  > stamp each remaining un-stamped placeholder with the next id per the `max`-over-three-sources
-  > rule (store `$S/research-memory`). Edit the worknote top-to-bottom. Stamp nothing else.
+  > Reserve and stamp the two tasks in `$S/Scratch.md`. Scan and partition out context
+  > blocks, then run `wn_allocate.py` with `--memory "$S/research-memory" --count 2`.
+  > Initialize each reserved Brief and stamp the returned IDs top-to-bottom. Preserve the
+  > reservation files and context blocks. Do not claim or execute tasks. A planning-only
+  > scan would remain read-only; this request explicitly authorizes reservation and stamping.
 
 - **Expected:** the two real placeholders become `<<#1 …>>` / `<<#2 …>>`; both context blocks are
-  byte-identical (no `<<!#` anywhere).
+  byte-identical (no `<<!#` anywhere), with durable task-1 and task-2 records and no Attempts.
 - **Assert:** `bash tests/mock-memory/assert.sh X2 "$S"`
 
 ## X3 — `context-drift` detection via `status`
@@ -444,14 +448,14 @@ The memory store is `$S/research-memory/` (fixed relative path the skill expects
 ## Q1 — query: how to reproduce the last job
 
 - **Fixture:** `query-repro` — `runbook.md` §Submit has `sbatch --nodes=2 run.sh <config>`;
-  `configs.md` has a `pmt-repro` row (key knobs); `jobs.md` has two rows whose **last** (most
-  recent) is `srun-950` / `configs.md#pmt-repro` (the earlier is `srun-900` / baseline).
+  `configs.md` has a `pmt-repro` row (key knobs). The newest submitted job is `srun-950`;
+  the final ledger row is a later status update for the older `srun-900`.
 - **Setup:** `bash tests/mock-memory/setup.sh Q1 "$S"`
 - **Action** (research-memory `query`, read-only):
 
   > research-memory `query`, store `$S/research-memory`. Question: "how do I reproduce the last
-  > job?" Follow the Query dispatch skeleton: search order `MEMORY.md` → `jobs.md` (the LAST row is
-  > the most recent job) → its `config ref` row in `configs.md` (key knobs) → `runbook.md` §Submit
+  > job?" Follow the query contract: search order `MEMORY.md` → `jobs.md` (select the newest
+  > submission, not the last status update) → its `config ref` row in `configs.md` (key knobs) → `runbook.md` §Submit
   > (the launch command); assemble a reproduction recipe naming THAT job id, its config, and the
   > submit command, each with an evidence pointer. Do NOT modify any file. Write the returned answer
   > verbatim to `$S/answer.txt`.

@@ -244,7 +244,8 @@ def attempt_context(memdir: str, pid: int) -> str | None:
     # Bound the last Attempt at the next heading, so a `context:` line in Working notes
     # or Outcome is never mistaken for the Attempt's recorded chain.
     last = re.split(r"^ {0,3}#{1,6}\s", attempts[-1], flags=re.M)[0]
-    m = re.search(r"^-\s*context:\s*(.*?)\s*$", last, flags=re.M)
+    # Horizontal whitespace only: an empty context must not consume the next field.
+    m = re.search(r"^-[ \t]*context:[ \t]*(.*?)[ \t]*$", last, flags=re.M)
     return m.group(1) if m else None
 
 
@@ -312,14 +313,18 @@ def scan(path: str, memdir: str | None) -> dict:
                 hi = mid - 1
         return lo + 1
 
-    # Match first: a `<<...>>` body may contain a `#` line (a shell comment, a numbered
-    # step), which is document text of the placeholder, not document structure. Mask every
-    # line a match spans before deriving headings.
+    # Hide marker contents, preserving structural prefixes outside each match. Masking
+    # whole lines would hide a real heading such as '# Results <<task>>'. Non-whitespace
+    # padding also prevents text after a closing marker from becoming a fake heading.
     matches = list(PLACEHOLDER_RE.finditer(text))
-    masked: set[int] = set()
+    structural = []
+    previous = 0
     for m in matches:
-        masked.update(range(line_of(m.start()), line_of(m.end() - 1) + 1))
-    hs = headings(lines, masked)
+        structural.extend((text[previous:m.start()], re.sub(r"[^\n]", "x", m.group(0))))
+        previous = m.end()
+    structural.append(text[previous:])
+    hs = [(line, level, HEADING_RE.match(lines[line - 1]).group(2))
+          for line, level, _ in headings("".join(structural).split("\n"))]
 
     context_blocks: list[dict] = []
     placeholders: list[dict] = []

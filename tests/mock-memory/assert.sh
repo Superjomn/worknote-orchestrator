@@ -68,7 +68,8 @@ case "$CASE" in
       case "$CASE" in
         P3) check "refusal names the missing evidence pointer" grep -qi 'evidence' "$REF" ;;
         P4) check "refusal names the missing task file (task-2)" grep -q 'task-2' "$REF" ;;
-        P5) check "refusal names the empty focus text" grep -qi 'empty' "$REF" ;;
+        P5) check "clarification names missing input or clearing intent" \
+              grep -qiE 'empty|missing|clearing intent' "$REF" ;;
         J1) check "refusal names the invented status (released)" grep -q 'released' "$REF" ;;
         C5) check "refusal names the evidence job state (failed)" grep -qi 'failed' "$REF" ;;
         S2) check "refusal names the DONE/changelog/forward-looking rule" \
@@ -193,7 +194,10 @@ case "$CASE" in
   L1) # near-cap promote: ≤150 lines, new bullet present, no pointer dropped.
     lines=$(wc -l < "$MEM")
     le "MEMORY.md ≤150 lines" 150 "$lines"
-    check "new bullet → tasks/task-90.md present" grep -q '→ tasks/task-90\.md' "$MEM"
+    checkn "fixture has no pre-existing task-190 conclusion" \
+      grep -q '→ tasks/task-190\.md' "$ORIG/MEMORY.md"
+    check "new conclusion and task-190 pointer present" \
+      grep -Eq '2\.1x speedup.*→ tasks/task-190\.md' "$MEM"
     if [ -f "$SCRATCH/pointers.orig" ]; then
       missing=0
       while IFS= read -r ptr; do
@@ -226,6 +230,9 @@ case "$CASE" in
     np=$(grep -c 'promoted:' "$T" 2>/dev/null || true)
     eq "exactly one promoted: line (Outcome write-once)" 1 "$np"
     check "promoted: FAILED recorded (drift stays visible)" grep -q 'promoted: FAILED' "$T"
+    check "failed promotion leaves index unchanged" diff "$ORIG/MEMORY.md" "$MEM"
+    check "isolated Outcome step leaves worknote unchanged" \
+      diff "$SCRATCH/Scratch.md.orig" "$SCRATCH/Scratch.md"
     ;;
 
   X1) # context hiding: the #2 dispatch prompt carries the global + S2 chain, never S1's.
@@ -255,6 +262,10 @@ case "$CASE" in
     check "second real placeholder stamped #2" grep -q '<<#2 profile the decode phase>>' "$WN"
     nb=$(grep -c '<<!' "$WN" 2>/dev/null || true)
     eq "still exactly 2 context blocks" 2 "$nb"
+    for id in 1 2; do
+      check "task-$id reservation exists" test -f "$STORE/tasks/task-$id.md"
+      checkn "task-$id has no fabricated Attempt" grep -q '^### Attempt' "$STORE/tasks/task-$id.md"
+    done
     ;;
 
   X3) # context-drift detection: status output has a context-drift row for id 1.
