@@ -21,7 +21,7 @@
 #   L1          -> near-cap         (MEMORY.md padded to exactly 150 lines)
 #   D1          -> drifted          (tasks/task-2.md Outcome claims promotion, MEMORY.md has none)
 #   W1          -> worknote         (fresh store + tasks/task-1.md + Scratch.md RUNNING#1 marker)
-#   Q1          -> query-repro      (runbook §Submit + configs + jobs.md whose LAST row is srun-950)
+#   Q1          -> query-repro      (newest submission srun-950; last update is older srun-900)
 #   Q2          -> query-nsys       (jobs.md: 2 .nsys-rep ptrs + 1 non-nsys; task-1 has a 3rd nsys path)
 #   Q3          -> query-foreign    (sibling Prod.md + Prod.memory/ holding the answer; local store fresh)
 #   Q4          -> query-fallback   (sibling Notes.md fact ONLY in markdown; no Notes.memory/ beside it)
@@ -493,17 +493,19 @@ write_configs_repro() {
 EOF
 }
 
-# write_jobs_repro — TWO rows; the LAST (most recent) is srun-950 / pmt-repro.
+# write_jobs_repro — newest submission differs from the last updated job.
 write_jobs_repro() {
   cat > "$STORE/jobs.md" <<'EOF'
 # Jobs Ledger
 
-<!-- APPEND-ONLY. Never rewrite or reorder rows. The LAST row is the most recent job. -->
+<!-- APPEND-ONLY. Select the newest submission, not the last status update. -->
 
 | timestamp | job id | purpose | config ref | owner | status | result ptr |
 |---|---|---|---|---|---|---|
-| 2026-07-11 09:00 | srun-900 | verify baseline-v2 | configs.md#baseline-v2 | tab:mock | finished | /logs/900.txt |
+| 2026-07-11 09:00 | srun-900 | verify baseline-v2 | configs.md#baseline-v2 | tab:mock | submitted | /receipts/900.txt |
+| 2026-07-13 13:00 | srun-950 | reproduce pmt run | configs.md#pmt-repro | tab:mock | submitted | /receipts/950.txt |
 | 2026-07-13 14:00 | srun-950 | reproduce pmt run | configs.md#pmt-repro | tab:mock | finished | /logs/950.txt |
+| 2026-07-14 10:00 | srun-900 | verify baseline-v2 | configs.md#baseline-v2 | tab:mock | finished | /logs/900.txt |
 EOF
 }
 
@@ -652,7 +654,7 @@ build_config_working() {
 build_near_cap() {
   copy_templates
   write_memory_near_cap
-  make_task 90
+  make_task 190
   grep -oE '→ tasks/task-[0-9]+\.md' "$STORE/MEMORY.md" | sort -u > "$SCRATCH/pointers.orig"
 }
 
@@ -722,13 +724,46 @@ EOF
 }
 build_worknote() {
   copy_templates
-  make_task 1
   cat > "$SCRATCH/Scratch.md" <<'EOF'
 # Scratch worknote
 
 ## Result
-<<RUNNING#1 owner=tab:mock job=srun-777 since=2026-07-09 task: mock promote read-back>>
+<<RUNNING#1 owner=tab:mock attempt=fixture-w1 job=srun-777 since=2026-07-09 task: mock promote read-back>>
 EOF
+  python3 - "$SCRATCH" "$SCRIPT_DIR/../../skills/worknote-orchestrate/scripts" <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[2])
+from wn_scan import scan
+scratch = Path(sys.argv[1]).resolve()
+worknote = scratch / 'Scratch.md'
+marker = scan(str(worknote), str(scratch / 'research-memory'))['placeholders'][0]
+(scratch / 'research-memory/tasks/task-1.md').write_text(f'''# Task #1 — promotion read-back
+
+## Brief
+- task: {marker['task']}
+- workdir: {scratch}
+- worknote: {worknote}#1
+- context: none
+- blockers: none
+
+## Attempts
+### Attempt 1 — 2026-07-09 10:00
+- task: {marker['task']}
+- owner: {marker['owner']}
+- token: {marker['attempt']}
+- fingerprint: {marker['fingerprint']}
+- context: none
+- tried: verified tp=8 — job srun-901, /logs/901.txt
+- jobs: srun-901
+- outcome: active
+- next step: promote and record Outcome
+
+## Working notes
+
+## Outcome
+''', encoding='utf-8')
+PY
 }
 
 build_focus_bloated() {

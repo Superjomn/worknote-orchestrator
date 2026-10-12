@@ -168,6 +168,38 @@ class LifecycleTests(unittest.TestCase):
         b = wn_scan.task_fingerprint('task', [{'text': 'a'}, {'text': 'b'}], {})
         self.assertNotEqual(a, b)
 
+    def test_empty_attempt_context_does_not_consume_following_field(self):
+        tasks = self.memory / 'tasks'
+        tasks.mkdir()
+        self.note.write_text(self.marker)
+        for following in ['- tried: none', '', '## Outcome\n- context: unrelated']:
+            with self.subTest(following=following):
+                (tasks / 'task-1.md').write_text(
+                    '## Attempts\n### Attempt 1\n- context: \t\n' + following + '\n')
+                self.assertEqual(wn_scan.attempt_context(str(self.memory), 1), '')
+                result = wn_scan.scan(str(self.note), str(self.memory))
+                self.assertFalse(result['placeholders'][0]['context_drift'])
+
+    def test_heading_containing_marker_closes_previous_scope(self):
+        self.note.write_text('# A\n<<! @dir:/a >>\n# B <<#1 title>>\n<<#2 task>>\n')
+        result = wn_scan.scan(str(self.note), str(self.memory))
+        for placeholder in result['placeholders']:
+            self.assertEqual(placeholder['section'], 'B <<#1 title>>')
+            self.assertEqual(placeholder['context_chain'], [])
+            self.assertIsNone(placeholder['effective_dir'])
+
+    def test_heading_containing_context_scopes_it_to_that_heading(self):
+        self.note.write_text('# A <<! @memory >>\n<<#1 task>>\n# B\n<<#2 task>>\n')
+        result = wn_scan.scan(str(self.note), str(self.memory))
+        self.assertEqual(result['placeholders'][0]['directives'], {'memory': True})
+        self.assertEqual(result['placeholders'][1]['context_chain'], [])
+
+    def test_marker_tail_cannot_create_a_heading(self):
+        self.note.write_text('# A\n<<! @memory >>\n<<#1 multiline\n>># fake\n<<#2 task>>')
+        result = wn_scan.scan(str(self.note), str(self.memory))
+        self.assertEqual(result['placeholders'][1]['section'], 'A')
+        self.assertEqual(result['placeholders'][1]['directives'], {'memory': True})
+
     def test_concurrent_allocations_do_not_collide(self):
         before_note = self.note.read_bytes()
         processes = [subprocess.Popen(self.command('wn_allocate.py', '--count', '3'),
